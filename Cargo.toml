@@ -2,5 +2,10 @@
 name = "raft"
 version = "0.1.0"
 authors = ["cssivision <cssivision@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/cssivision/raft-rs"
+homepage = "https://github.com/cssivision/raft-rs"
+description = "raft implementation in rust."
+readme = "README.md"
 
 [dependencies]
