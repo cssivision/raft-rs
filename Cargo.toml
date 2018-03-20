@@ -11,3 +11,5 @@ readme = "README.md"
 [dependencies]
 protobuf = "1.4"
 log = "0.4"
+failure = "0.1"
+failure_derive = "0.1.1"

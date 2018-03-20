@@ -32,3 +32,11 @@ message ConfState {
 enum MessageType {
     MsgHup = 0;
 }
+
+message HardState {
+    
+}
+
+message RaftState {
+    
+}
