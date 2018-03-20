@@ -1,0 +1,34 @@
+syntax = "proto3";
+package raftpb;
+
+enum EntryType {
+    EntryNormal = 0;
+    EntryConfChange = 1;
+}
+
+message Entry {
+	uint64     Term  = 1; // must be 64-bit aligned for atomic operations
+	uint64     Index = 2; // must be 64-bit aligned for atomic operations
+	EntryType  Type  = 3;
+	bytes      Data  = 4;
+}
+
+message SnapshotMetadata {
+    ConfState conf_state = 1;
+    uint64    index      = 2;
+    uint64    term       = 3;
+}
+
+message Snapshot {
+    bytes            data     = 1;
+    SnapshotMetadata metadata = 2;
+}
+
+message ConfState {
+	repeated uint64 nodes    = 1;
+	repeated uint64 learners = 2;
+}
+
+enum MessageType {
+    MsgHup = 0;
+}

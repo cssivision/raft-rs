@@ -9,3 +9,5 @@ description = "raft implementation in rust."
 readme = "README.md"
 
 [dependencies]
+protobuf = "1.4"
+log = "0.4"
