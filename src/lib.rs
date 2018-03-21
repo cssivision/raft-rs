@@ -13,3 +13,4 @@ mod errors;
 mod raft;
 mod raft_log;
 mod log_unstable;
+mod progress;
