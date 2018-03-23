@@ -107,6 +107,15 @@ pub struct Progress {
 }
 
 impl Progress {
+    pub fn new(next: u64, ins_size: usize, is_lenarner: bool) -> Progress {
+        Progress{
+            next: next,
+            is_lenarner: is_lenarner, 
+            ins: Inflights::new(ins_size),
+            ..Default::default()
+        }
+    }
+
     pub fn reset_state(&mut self, state: ProgressState) {
         self.paused = false;
         self.pending_snapshot = 0;

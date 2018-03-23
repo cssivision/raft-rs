@@ -1070,6 +1070,10 @@ impl ::protobuf::reflect::ProtobufValue for ConfState {
 
 #[derive(PartialEq,Clone,Default)]
 pub struct HardState {
+    // message fields
+    pub term: u64,
+    pub vote: u64,
+    pub commit: u64,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::protobuf::CachedSize,
@@ -1092,6 +1096,75 @@ impl HardState {
             instance.get(HardState::new)
         }
     }
+
+    // uint64 term = 1;
+
+    pub fn clear_term(&mut self) {
+        self.term = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_term(&mut self, v: u64) {
+        self.term = v;
+    }
+
+    pub fn get_term(&self) -> u64 {
+        self.term
+    }
+
+    fn get_term_for_reflect(&self) -> &u64 {
+        &self.term
+    }
+
+    fn mut_term_for_reflect(&mut self) -> &mut u64 {
+        &mut self.term
+    }
+
+    // uint64 vote = 2;
+
+    pub fn clear_vote(&mut self) {
+        self.vote = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_vote(&mut self, v: u64) {
+        self.vote = v;
+    }
+
+    pub fn get_vote(&self) -> u64 {
+        self.vote
+    }
+
+    fn get_vote_for_reflect(&self) -> &u64 {
+        &self.vote
+    }
+
+    fn mut_vote_for_reflect(&mut self) -> &mut u64 {
+        &mut self.vote
+    }
+
+    // uint64 commit = 3;
+
+    pub fn clear_commit(&mut self) {
+        self.commit = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_commit(&mut self, v: u64) {
+        self.commit = v;
+    }
+
+    pub fn get_commit(&self) -> u64 {
+        self.commit
+    }
+
+    fn get_commit_for_reflect(&self) -> &u64 {
+        &self.commit
+    }
+
+    fn mut_commit_for_reflect(&mut self) -> &mut u64 {
+        &mut self.commit
+    }
 }
 
 impl ::protobuf::Message for HardState {
@@ -1103,6 +1176,27 @@ impl ::protobuf::Message for HardState {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.term = tmp;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.vote = tmp;
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.commit = tmp;
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -1115,12 +1209,30 @@ impl ::protobuf::Message for HardState {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
+        if self.term != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.term, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.vote != 0 {
+            my_size += ::protobuf::rt::value_size(2, self.vote, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.commit != 0 {
+            my_size += ::protobuf::rt::value_size(3, self.commit, ::protobuf::wire_format::WireTypeVarint);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+        if self.term != 0 {
+            os.write_uint64(1, self.term)?;
+        }
+        if self.vote != 0 {
+            os.write_uint64(2, self.vote)?;
+        }
+        if self.commit != 0 {
+            os.write_uint64(3, self.commit)?;
+        }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1164,7 +1276,22 @@ impl ::protobuf::MessageStatic for HardState {
         };
         unsafe {
             descriptor.get(|| {
-                let fields = ::std::vec::Vec::new();
+                let mut fields = ::std::vec::Vec::new();
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "term",
+                    HardState::get_term_for_reflect,
+                    HardState::mut_term_for_reflect,
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "vote",
+                    HardState::get_vote_for_reflect,
+                    HardState::mut_vote_for_reflect,
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "commit",
+                    HardState::get_commit_for_reflect,
+                    HardState::mut_commit_for_reflect,
+                ));
                 ::protobuf::reflect::MessageDescriptor::new::<HardState>(
                     "HardState",
                     fields,
@@ -1177,6 +1304,9 @@ impl ::protobuf::MessageStatic for HardState {
 
 impl ::protobuf::Clear for HardState {
     fn clear(&mut self) {
+        self.clear_term();
+        self.clear_vote();
+        self.clear_commit();
         self.unknown_fields.clear();
     }
 }
@@ -1188,131 +1318,6 @@ impl ::std::fmt::Debug for HardState {
 }
 
 impl ::protobuf::reflect::ProtobufValue for HardState {
-    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
-        ::protobuf::reflect::ProtobufValueRef::Message(self)
-    }
-}
-
-#[derive(PartialEq,Clone,Default)]
-pub struct RaftState {
-    // special fields
-    unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::protobuf::CachedSize,
-}
-
-// see codegen.rs for the explanation why impl Sync explicitly
-unsafe impl ::std::marker::Sync for RaftState {}
-
-impl RaftState {
-    pub fn new() -> RaftState {
-        ::std::default::Default::default()
-    }
-
-    pub fn default_instance() -> &'static RaftState {
-        static mut instance: ::protobuf::lazy::Lazy<RaftState> = ::protobuf::lazy::Lazy {
-            lock: ::protobuf::lazy::ONCE_INIT,
-            ptr: 0 as *const RaftState,
-        };
-        unsafe {
-            instance.get(RaftState::new)
-        }
-    }
-}
-
-impl ::protobuf::Message for RaftState {
-    fn is_initialized(&self) -> bool {
-        true
-    }
-
-    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !is.eof()? {
-            let (field_number, wire_type) = is.read_tag_unpack()?;
-            match field_number {
-                _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
-                },
-            };
-        }
-        ::std::result::Result::Ok(())
-    }
-
-    // Compute sizes of nested messages
-    #[allow(unused_variables)]
-    fn compute_size(&self) -> u32 {
-        let mut my_size = 0;
-        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
-        self.cached_size.set(my_size);
-        my_size
-    }
-
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        os.write_unknown_fields(self.get_unknown_fields())?;
-        ::std::result::Result::Ok(())
-    }
-
-    fn get_cached_size(&self) -> u32 {
-        self.cached_size.get()
-    }
-
-    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
-        &self.unknown_fields
-    }
-
-    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
-        &mut self.unknown_fields
-    }
-
-    fn as_any(&self) -> &::std::any::Any {
-        self as &::std::any::Any
-    }
-    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
-        self as &mut ::std::any::Any
-    }
-    fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
-        self
-    }
-
-    fn descriptor(&self) -> &'static ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::MessageStatic::descriptor_static(None::<Self>)
-    }
-}
-
-impl ::protobuf::MessageStatic for RaftState {
-    fn new() -> RaftState {
-        RaftState::new()
-    }
-
-    fn descriptor_static(_: ::std::option::Option<RaftState>) -> &'static ::protobuf::reflect::MessageDescriptor {
-        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::lazy::Lazy {
-            lock: ::protobuf::lazy::ONCE_INIT,
-            ptr: 0 as *const ::protobuf::reflect::MessageDescriptor,
-        };
-        unsafe {
-            descriptor.get(|| {
-                let fields = ::std::vec::Vec::new();
-                ::protobuf::reflect::MessageDescriptor::new::<RaftState>(
-                    "RaftState",
-                    fields,
-                    file_descriptor_proto()
-                )
-            })
-        }
-    }
-}
-
-impl ::protobuf::Clear for RaftState {
-    fn clear(&mut self) {
-        self.unknown_fields.clear();
-    }
-}
-
-impl ::std::fmt::Debug for RaftState {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
-    }
-}
-
-impl ::protobuf::reflect::ProtobufValue for RaftState {
     fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
         ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
@@ -1425,6 +1430,67 @@ impl ::protobuf::reflect::ProtobufValue for MessageType {
     }
 }
 
+#[derive(Clone,PartialEq,Eq,Debug,Hash)]
+pub enum ConfChangeType {
+    ConfChangeAddNode = 0,
+    ConfChangeRemoveNode = 1,
+    ConfChangeUpdateNode = 2,
+    ConfChangeAddLearnerNode = 3,
+}
+
+impl ::protobuf::ProtobufEnum for ConfChangeType {
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ConfChangeType> {
+        match value {
+            0 => ::std::option::Option::Some(ConfChangeType::ConfChangeAddNode),
+            1 => ::std::option::Option::Some(ConfChangeType::ConfChangeRemoveNode),
+            2 => ::std::option::Option::Some(ConfChangeType::ConfChangeUpdateNode),
+            3 => ::std::option::Option::Some(ConfChangeType::ConfChangeAddLearnerNode),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn values() -> &'static [Self] {
+        static values: &'static [ConfChangeType] = &[
+            ConfChangeType::ConfChangeAddNode,
+            ConfChangeType::ConfChangeRemoveNode,
+            ConfChangeType::ConfChangeUpdateNode,
+            ConfChangeType::ConfChangeAddLearnerNode,
+        ];
+        values
+    }
+
+    fn enum_descriptor_static(_: ::std::option::Option<ConfChangeType>) -> &'static ::protobuf::reflect::EnumDescriptor {
+        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const ::protobuf::reflect::EnumDescriptor,
+        };
+        unsafe {
+            descriptor.get(|| {
+                ::protobuf::reflect::EnumDescriptor::new("ConfChangeType", file_descriptor_proto())
+            })
+        }
+    }
+}
+
+impl ::std::marker::Copy for ConfChangeType {
+}
+
+impl ::std::default::Default for ConfChangeType {
+    fn default() -> Self {
+        ConfChangeType::ConfChangeAddNode
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ConfChangeType {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
+}
+
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\x13raftpb/raftpb.proto\x12\x06raftpb\"l\n\x05Entry\x12\x12\n\x04Term\
     \x18\x01\x20\x01(\x04R\x04Term\x12\x14\n\x05Index\x18\x02\x20\x01(\x04R\
@@ -1436,65 +1502,87 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x01\x20\x01(\x0cR\x04data\x124\n\x08metadata\x18\x02\x20\x01(\x0b2\x18.\
     raftpb.SnapshotMetadataR\x08metadata\"=\n\tConfState\x12\x14\n\x05nodes\
     \x18\x01\x20\x03(\x04R\x05nodes\x12\x1a\n\x08learners\x18\x02\x20\x03(\
-    \x04R\x08learners\"\x0b\n\tHardState\"\x0b\n\tRaftState*1\n\tEntryType\
-    \x12\x0f\n\x0bEntryNormal\x10\0\x12\x13\n\x0fEntryConfChange\x10\x01*\
-    \x19\n\x0bMessageType\x12\n\n\x06MsgHup\x10\0J\xb7\t\n\x06\x12\x04\0\0)\
-    \x01\n\x08\n\x01\x0c\x12\x03\0\0\x12\n\x08\n\x01\x02\x12\x03\x01\x08\x0e\
-    \n\n\n\x02\x05\0\x12\x04\x03\0\x06\x01\n\n\n\x03\x05\0\x01\x12\x03\x03\
-    \x05\x0e\n\x0b\n\x04\x05\0\x02\0\x12\x03\x04\x04\x14\n\x0c\n\x05\x05\0\
-    \x02\0\x01\x12\x03\x04\x04\x0f\n\x0c\n\x05\x05\0\x02\0\x02\x12\x03\x04\
-    \x12\x13\n\x0b\n\x04\x05\0\x02\x01\x12\x03\x05\x04\x18\n\x0c\n\x05\x05\0\
-    \x02\x01\x01\x12\x03\x05\x04\x13\n\x0c\n\x05\x05\0\x02\x01\x02\x12\x03\
-    \x05\x16\x17\n\n\n\x02\x04\0\x12\x04\x08\0\r\x01\n\n\n\x03\x04\0\x01\x12\
-    \x03\x08\x08\r\n;\n\x04\x04\0\x02\0\x12\x03\t\x08\x1d\".\x20must\x20be\
-    \x2064-bit\x20aligned\x20for\x20atomic\x20operations\n\n\r\n\x05\x04\0\
-    \x02\0\x04\x12\x04\t\x08\x08\x0f\n\x0c\n\x05\x04\0\x02\0\x05\x12\x03\t\
-    \x08\x0e\n\x0c\n\x05\x04\0\x02\0\x01\x12\x03\t\x13\x17\n\x0c\n\x05\x04\0\
-    \x02\0\x03\x12\x03\t\x1b\x1c\n;\n\x04\x04\0\x02\x01\x12\x03\n\x08\x1d\".\
-    \x20must\x20be\x2064-bit\x20aligned\x20for\x20atomic\x20operations\n\n\r\
-    \n\x05\x04\0\x02\x01\x04\x12\x04\n\x08\t\x1d\n\x0c\n\x05\x04\0\x02\x01\
-    \x05\x12\x03\n\x08\x0e\n\x0c\n\x05\x04\0\x02\x01\x01\x12\x03\n\x13\x18\n\
-    \x0c\n\x05\x04\0\x02\x01\x03\x12\x03\n\x1b\x1c\n\x0b\n\x04\x04\0\x02\x02\
-    \x12\x03\x0b\x08\x1d\n\r\n\x05\x04\0\x02\x02\x04\x12\x04\x0b\x08\n\x1d\n\
-    \x0c\n\x05\x04\0\x02\x02\x06\x12\x03\x0b\x08\x11\n\x0c\n\x05\x04\0\x02\
-    \x02\x01\x12\x03\x0b\x13\x17\n\x0c\n\x05\x04\0\x02\x02\x03\x12\x03\x0b\
-    \x1b\x1c\n\x0b\n\x04\x04\0\x02\x03\x12\x03\x0c\x08\x1d\n\r\n\x05\x04\0\
-    \x02\x03\x04\x12\x04\x0c\x08\x0b\x1d\n\x0c\n\x05\x04\0\x02\x03\x05\x12\
-    \x03\x0c\x08\r\n\x0c\n\x05\x04\0\x02\x03\x01\x12\x03\x0c\x13\x17\n\x0c\n\
-    \x05\x04\0\x02\x03\x03\x12\x03\x0c\x1b\x1c\n\n\n\x02\x04\x01\x12\x04\x0f\
-    \0\x13\x01\n\n\n\x03\x04\x01\x01\x12\x03\x0f\x08\x18\n\x0b\n\x04\x04\x01\
-    \x02\0\x12\x03\x10\x04\x1d\n\r\n\x05\x04\x01\x02\0\x04\x12\x04\x10\x04\
-    \x0f\x1a\n\x0c\n\x05\x04\x01\x02\0\x06\x12\x03\x10\x04\r\n\x0c\n\x05\x04\
-    \x01\x02\0\x01\x12\x03\x10\x0e\x18\n\x0c\n\x05\x04\x01\x02\0\x03\x12\x03\
-    \x10\x1b\x1c\n\x0b\n\x04\x04\x01\x02\x01\x12\x03\x11\x04\x1d\n\r\n\x05\
-    \x04\x01\x02\x01\x04\x12\x04\x11\x04\x10\x1d\n\x0c\n\x05\x04\x01\x02\x01\
-    \x05\x12\x03\x11\x04\n\n\x0c\n\x05\x04\x01\x02\x01\x01\x12\x03\x11\x0e\
-    \x13\n\x0c\n\x05\x04\x01\x02\x01\x03\x12\x03\x11\x1b\x1c\n\x0b\n\x04\x04\
-    \x01\x02\x02\x12\x03\x12\x04\x1d\n\r\n\x05\x04\x01\x02\x02\x04\x12\x04\
-    \x12\x04\x11\x1d\n\x0c\n\x05\x04\x01\x02\x02\x05\x12\x03\x12\x04\n\n\x0c\
-    \n\x05\x04\x01\x02\x02\x01\x12\x03\x12\x0e\x12\n\x0c\n\x05\x04\x01\x02\
-    \x02\x03\x12\x03\x12\x1b\x1c\n\n\n\x02\x04\x02\x12\x04\x15\0\x18\x01\n\n\
-    \n\x03\x04\x02\x01\x12\x03\x15\x08\x10\n\x0b\n\x04\x04\x02\x02\0\x12\x03\
-    \x16\x04\"\n\r\n\x05\x04\x02\x02\0\x04\x12\x04\x16\x04\x15\x12\n\x0c\n\
-    \x05\x04\x02\x02\0\x05\x12\x03\x16\x04\t\n\x0c\n\x05\x04\x02\x02\0\x01\
-    \x12\x03\x16\x15\x19\n\x0c\n\x05\x04\x02\x02\0\x03\x12\x03\x16\x20!\n\
-    \x0b\n\x04\x04\x02\x02\x01\x12\x03\x17\x04\"\n\r\n\x05\x04\x02\x02\x01\
-    \x04\x12\x04\x17\x04\x16\"\n\x0c\n\x05\x04\x02\x02\x01\x06\x12\x03\x17\
-    \x04\x14\n\x0c\n\x05\x04\x02\x02\x01\x01\x12\x03\x17\x15\x1d\n\x0c\n\x05\
-    \x04\x02\x02\x01\x03\x12\x03\x17\x20!\n\n\n\x02\x04\x03\x12\x04\x1a\0\
-    \x1d\x01\n\n\n\x03\x04\x03\x01\x12\x03\x1a\x08\x11\n\x0b\n\x04\x04\x03\
-    \x02\0\x12\x03\x1b\x08%\n\x0c\n\x05\x04\x03\x02\0\x04\x12\x03\x1b\x08\
-    \x10\n\x0c\n\x05\x04\x03\x02\0\x05\x12\x03\x1b\x11\x17\n\x0c\n\x05\x04\
-    \x03\x02\0\x01\x12\x03\x1b\x18\x1d\n\x0c\n\x05\x04\x03\x02\0\x03\x12\x03\
-    \x1b#$\n\x0b\n\x04\x04\x03\x02\x01\x12\x03\x1c\x08%\n\x0c\n\x05\x04\x03\
-    \x02\x01\x04\x12\x03\x1c\x08\x10\n\x0c\n\x05\x04\x03\x02\x01\x05\x12\x03\
-    \x1c\x11\x17\n\x0c\n\x05\x04\x03\x02\x01\x01\x12\x03\x1c\x18\x20\n\x0c\n\
-    \x05\x04\x03\x02\x01\x03\x12\x03\x1c#$\n\n\n\x02\x05\x01\x12\x04\x1f\0!\
-    \x01\n\n\n\x03\x05\x01\x01\x12\x03\x1f\x05\x10\n\x0b\n\x04\x05\x01\x02\0\
-    \x12\x03\x20\x04\x0f\n\x0c\n\x05\x05\x01\x02\0\x01\x12\x03\x20\x04\n\n\
-    \x0c\n\x05\x05\x01\x02\0\x02\x12\x03\x20\r\x0e\n\n\n\x02\x04\x04\x12\x04\
-    #\0%\x01\n\n\n\x03\x04\x04\x01\x12\x03#\x08\x11\n\n\n\x02\x04\x05\x12\
-    \x04'\0)\x01\n\n\n\x03\x04\x05\x01\x12\x03'\x08\x11b\x06proto3\
+    \x04R\x08learners\"K\n\tHardState\x12\x12\n\x04term\x18\x01\x20\x01(\x04\
+    R\x04term\x12\x12\n\x04vote\x18\x02\x20\x01(\x04R\x04vote\x12\x16\n\x06c\
+    ommit\x18\x03\x20\x01(\x04R\x06commit*1\n\tEntryType\x12\x0f\n\x0bEntryN\
+    ormal\x10\0\x12\x13\n\x0fEntryConfChange\x10\x01*\x19\n\x0bMessageType\
+    \x12\n\n\x06MsgHup\x10\0*y\n\x0eConfChangeType\x12\x15\n\x11ConfChangeAd\
+    dNode\x10\0\x12\x18\n\x14ConfChangeRemoveNode\x10\x01\x12\x18\n\x14ConfC\
+    hangeUpdateNode\x10\x02\x12\x1c\n\x18ConfChangeAddLearnerNode\x10\x03J\
+    \xad\x0c\n\x06\x12\x04\0\0.\x01\n\x08\n\x01\x0c\x12\x03\0\0\x12\n\x08\n\
+    \x01\x02\x12\x03\x01\x08\x0e\n\n\n\x02\x05\0\x12\x04\x03\0\x06\x01\n\n\n\
+    \x03\x05\0\x01\x12\x03\x03\x05\x0e\n\x0b\n\x04\x05\0\x02\0\x12\x03\x04\
+    \x04\x14\n\x0c\n\x05\x05\0\x02\0\x01\x12\x03\x04\x04\x0f\n\x0c\n\x05\x05\
+    \0\x02\0\x02\x12\x03\x04\x12\x13\n\x0b\n\x04\x05\0\x02\x01\x12\x03\x05\
+    \x04\x18\n\x0c\n\x05\x05\0\x02\x01\x01\x12\x03\x05\x04\x13\n\x0c\n\x05\
+    \x05\0\x02\x01\x02\x12\x03\x05\x16\x17\n\n\n\x02\x04\0\x12\x04\x08\0\r\
+    \x01\n\n\n\x03\x04\0\x01\x12\x03\x08\x08\r\n;\n\x04\x04\0\x02\0\x12\x03\
+    \t\x08\x1d\".\x20must\x20be\x2064-bit\x20aligned\x20for\x20atomic\x20ope\
+    rations\n\n\r\n\x05\x04\0\x02\0\x04\x12\x04\t\x08\x08\x0f\n\x0c\n\x05\
+    \x04\0\x02\0\x05\x12\x03\t\x08\x0e\n\x0c\n\x05\x04\0\x02\0\x01\x12\x03\t\
+    \x13\x17\n\x0c\n\x05\x04\0\x02\0\x03\x12\x03\t\x1b\x1c\n;\n\x04\x04\0\
+    \x02\x01\x12\x03\n\x08\x1d\".\x20must\x20be\x2064-bit\x20aligned\x20for\
+    \x20atomic\x20operations\n\n\r\n\x05\x04\0\x02\x01\x04\x12\x04\n\x08\t\
+    \x1d\n\x0c\n\x05\x04\0\x02\x01\x05\x12\x03\n\x08\x0e\n\x0c\n\x05\x04\0\
+    \x02\x01\x01\x12\x03\n\x13\x18\n\x0c\n\x05\x04\0\x02\x01\x03\x12\x03\n\
+    \x1b\x1c\n\x0b\n\x04\x04\0\x02\x02\x12\x03\x0b\x08\x1d\n\r\n\x05\x04\0\
+    \x02\x02\x04\x12\x04\x0b\x08\n\x1d\n\x0c\n\x05\x04\0\x02\x02\x06\x12\x03\
+    \x0b\x08\x11\n\x0c\n\x05\x04\0\x02\x02\x01\x12\x03\x0b\x13\x17\n\x0c\n\
+    \x05\x04\0\x02\x02\x03\x12\x03\x0b\x1b\x1c\n\x0b\n\x04\x04\0\x02\x03\x12\
+    \x03\x0c\x08\x1d\n\r\n\x05\x04\0\x02\x03\x04\x12\x04\x0c\x08\x0b\x1d\n\
+    \x0c\n\x05\x04\0\x02\x03\x05\x12\x03\x0c\x08\r\n\x0c\n\x05\x04\0\x02\x03\
+    \x01\x12\x03\x0c\x13\x17\n\x0c\n\x05\x04\0\x02\x03\x03\x12\x03\x0c\x1b\
+    \x1c\n\n\n\x02\x04\x01\x12\x04\x0f\0\x13\x01\n\n\n\x03\x04\x01\x01\x12\
+    \x03\x0f\x08\x18\n\x0b\n\x04\x04\x01\x02\0\x12\x03\x10\x04\x1d\n\r\n\x05\
+    \x04\x01\x02\0\x04\x12\x04\x10\x04\x0f\x1a\n\x0c\n\x05\x04\x01\x02\0\x06\
+    \x12\x03\x10\x04\r\n\x0c\n\x05\x04\x01\x02\0\x01\x12\x03\x10\x0e\x18\n\
+    \x0c\n\x05\x04\x01\x02\0\x03\x12\x03\x10\x1b\x1c\n\x0b\n\x04\x04\x01\x02\
+    \x01\x12\x03\x11\x04\x1d\n\r\n\x05\x04\x01\x02\x01\x04\x12\x04\x11\x04\
+    \x10\x1d\n\x0c\n\x05\x04\x01\x02\x01\x05\x12\x03\x11\x04\n\n\x0c\n\x05\
+    \x04\x01\x02\x01\x01\x12\x03\x11\x0e\x13\n\x0c\n\x05\x04\x01\x02\x01\x03\
+    \x12\x03\x11\x1b\x1c\n\x0b\n\x04\x04\x01\x02\x02\x12\x03\x12\x04\x1d\n\r\
+    \n\x05\x04\x01\x02\x02\x04\x12\x04\x12\x04\x11\x1d\n\x0c\n\x05\x04\x01\
+    \x02\x02\x05\x12\x03\x12\x04\n\n\x0c\n\x05\x04\x01\x02\x02\x01\x12\x03\
+    \x12\x0e\x12\n\x0c\n\x05\x04\x01\x02\x02\x03\x12\x03\x12\x1b\x1c\n\n\n\
+    \x02\x04\x02\x12\x04\x15\0\x18\x01\n\n\n\x03\x04\x02\x01\x12\x03\x15\x08\
+    \x10\n\x0b\n\x04\x04\x02\x02\0\x12\x03\x16\x04\"\n\r\n\x05\x04\x02\x02\0\
+    \x04\x12\x04\x16\x04\x15\x12\n\x0c\n\x05\x04\x02\x02\0\x05\x12\x03\x16\
+    \x04\t\n\x0c\n\x05\x04\x02\x02\0\x01\x12\x03\x16\x15\x19\n\x0c\n\x05\x04\
+    \x02\x02\0\x03\x12\x03\x16\x20!\n\x0b\n\x04\x04\x02\x02\x01\x12\x03\x17\
+    \x04\"\n\r\n\x05\x04\x02\x02\x01\x04\x12\x04\x17\x04\x16\"\n\x0c\n\x05\
+    \x04\x02\x02\x01\x06\x12\x03\x17\x04\x14\n\x0c\n\x05\x04\x02\x02\x01\x01\
+    \x12\x03\x17\x15\x1d\n\x0c\n\x05\x04\x02\x02\x01\x03\x12\x03\x17\x20!\n\
+    \n\n\x02\x04\x03\x12\x04\x1a\0\x1d\x01\n\n\n\x03\x04\x03\x01\x12\x03\x1a\
+    \x08\x11\n\x0b\n\x04\x04\x03\x02\0\x12\x03\x1b\x08%\n\x0c\n\x05\x04\x03\
+    \x02\0\x04\x12\x03\x1b\x08\x10\n\x0c\n\x05\x04\x03\x02\0\x05\x12\x03\x1b\
+    \x11\x17\n\x0c\n\x05\x04\x03\x02\0\x01\x12\x03\x1b\x18\x1d\n\x0c\n\x05\
+    \x04\x03\x02\0\x03\x12\x03\x1b#$\n\x0b\n\x04\x04\x03\x02\x01\x12\x03\x1c\
+    \x08%\n\x0c\n\x05\x04\x03\x02\x01\x04\x12\x03\x1c\x08\x10\n\x0c\n\x05\
+    \x04\x03\x02\x01\x05\x12\x03\x1c\x11\x17\n\x0c\n\x05\x04\x03\x02\x01\x01\
+    \x12\x03\x1c\x18\x20\n\x0c\n\x05\x04\x03\x02\x01\x03\x12\x03\x1c#$\n\n\n\
+    \x02\x05\x01\x12\x04\x1f\0!\x01\n\n\n\x03\x05\x01\x01\x12\x03\x1f\x05\
+    \x10\n\x0b\n\x04\x05\x01\x02\0\x12\x03\x20\x04\x0f\n\x0c\n\x05\x05\x01\
+    \x02\0\x01\x12\x03\x20\x04\n\n\x0c\n\x05\x05\x01\x02\0\x02\x12\x03\x20\r\
+    \x0e\n\n\n\x02\x04\x04\x12\x04#\0'\x01\n\n\n\x03\x04\x04\x01\x12\x03#\
+    \x08\x11\n\x0b\n\x04\x04\x04\x02\0\x12\x03$\x04\x16\n\r\n\x05\x04\x04\
+    \x02\0\x04\x12\x04$\x04#\x13\n\x0c\n\x05\x04\x04\x02\0\x05\x12\x03$\x04\
+    \n\n\x0c\n\x05\x04\x04\x02\0\x01\x12\x03$\x0b\x0f\n\x0c\n\x05\x04\x04\
+    \x02\0\x03\x12\x03$\x14\x15\n\x0b\n\x04\x04\x04\x02\x01\x12\x03%\x04\x16\
+    \n\r\n\x05\x04\x04\x02\x01\x04\x12\x04%\x04$\x16\n\x0c\n\x05\x04\x04\x02\
+    \x01\x05\x12\x03%\x04\n\n\x0c\n\x05\x04\x04\x02\x01\x01\x12\x03%\x0b\x0f\
+    \n\x0c\n\x05\x04\x04\x02\x01\x03\x12\x03%\x14\x15\n\x0b\n\x04\x04\x04\
+    \x02\x02\x12\x03&\x04\x16\n\r\n\x05\x04\x04\x02\x02\x04\x12\x04&\x04%\
+    \x16\n\x0c\n\x05\x04\x04\x02\x02\x05\x12\x03&\x04\n\n\x0c\n\x05\x04\x04\
+    \x02\x02\x01\x12\x03&\x0b\x11\n\x0c\n\x05\x04\x04\x02\x02\x03\x12\x03&\
+    \x14\x15\n\n\n\x02\x05\x02\x12\x04)\0.\x01\n\n\n\x03\x05\x02\x01\x12\x03\
+    )\x05\x13\n\x0b\n\x04\x05\x02\x02\0\x12\x03*\x08%\n\x0c\n\x05\x05\x02\
+    \x02\0\x01\x12\x03*\x08\x19\n\x0c\n\x05\x05\x02\x02\0\x02\x12\x03*#$\n\
+    \x0b\n\x04\x05\x02\x02\x01\x12\x03+\x08%\n\x0c\n\x05\x05\x02\x02\x01\x01\
+    \x12\x03+\x08\x1c\n\x0c\n\x05\x05\x02\x02\x01\x02\x12\x03+#$\n\x0b\n\x04\
+    \x05\x02\x02\x02\x12\x03,\x08%\n\x0c\n\x05\x05\x02\x02\x02\x01\x12\x03,\
+    \x08\x1c\n\x0c\n\x05\x05\x02\x02\x02\x02\x12\x03,#$\n\x0b\n\x04\x05\x02\
+    \x02\x03\x12\x03-\x08%\n\x0c\n\x05\x05\x02\x02\x03\x01\x12\x03-\x08\x20\
+    \n\x0c\n\x05\x05\x02\x02\x03\x02\x12\x03-#$b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {
