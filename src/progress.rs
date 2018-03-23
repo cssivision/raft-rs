@@ -152,6 +152,8 @@ impl Progress {
         self.paused = true;
     }
 
+    // maybeUpdate returns false if the given n index comes from an outdated message.
+    // Otherwise it updates the progress and returns true.
     pub fn maybe_update(&mut self, n: u64) -> bool {
         let mut updated = false;
         if self.matched < n {
@@ -192,10 +194,34 @@ impl Progress {
         self.pending_snapshot = 0;
     }
 
-    // needSnapshotAbort returns true if snapshot progress's Match
+    // returns true if snapshot progress's Match
     // is equal or higher than the pendingSnapshot.
-    pub fn need_snapshot_failure(&mut self) -> bool {
+    pub fn need_snapshot_abort(&mut self) -> bool {
         self.state == ProgressState::Snapshot && self.matched >= self.pending_snapshot
+    }
+
+    pub fn maybe_decr_to(&mut self, rejected: u64, last: u64) -> bool {
+        if self.state == ProgressState::Replicate {
+            // the rejection must be stale if the progress has matched and "rejected"
+            // is smaller than "match".
+            if rejected <= self.matched {
+                return false;
+            }
+            self.next = self.matched + 1;
+            return true;
+        }
+
+        // the rejection must be stale if "rejected" does not match next - 1
+        if self.next - 1 != rejected {
+            return false;
+        }
+
+        self.next = cmp::min(rejected, last + 1);
+        if self.next < 1 {
+            self.next = 1;
+        }
+        self.resume();
+        true
     }
 }
 
@@ -205,20 +231,28 @@ pub struct Inflights {
     pub start: usize,
     // number of inflights in the buffer
     pub count: usize,
-    // the size of the buffer
-    pub size: usize,
     // buffer contains the index of the last entry
 	// inside one message.
     pub buffer: Vec<u64>,
 }
 
 impl Inflights {
+    pub fn new(cap: usize) -> Inflights {
+        return Inflights{
+            buffer: Vec::with_capacity(cap),
+            ..Default::default()
+        }
+    }
     fn reset(&mut self) {
         self.start = 0;
         self.count = 0;
     }
 
     fn full(&self) -> bool {
-        self.count == self.size
+        self.count == self.cap()
+    }
+
+    fn cap(&self) -> usize {
+        self.buffer.capacity()
     }
 }
