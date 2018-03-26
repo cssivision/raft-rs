@@ -132,7 +132,7 @@ impl<T: Storage> Config<T> {
         }
 
         if self.read_only_option == ReadOnlyOption::LeaseBased && !self.check_quorum {
-		    return Err(format_err!("CheckQuorum must be enabled when ReadOnlyOption is ReadOnlyLeaseBased"))
+		    return Err(format_err!("check_quorum must be enabled when ReadOnlyOption is ReadOnlyOption::LeaseBased"))
 	    }
 
         Ok(())
