@@ -2,10 +2,29 @@ use storage::Storage;
 use raft_log::raftLog;
 use errors::Result;
 
+#[derive(Debug, PartialEq)]
+enum ReadOnlyOption {
+    /// Safe guarantees the linearizability of the read only request by
+    /// communicating with the quorum. It is the default and suggested option.
+    Safe, 
+    /// LeaseBased ensures linearizability of the read only request by
+    /// relying on the leader lease. It can be affected by clock drift.
+    /// If the clock drift is unbounded, leader might keep the lease longer than it
+    /// should (clock can move backward/pause without any bound). ReadIndex is not safe
+    /// in that case.
+    LeaseBased,
+}
+
+impl Default for ReadOnlyOption {
+    fn default() -> ReadOnlyOption {
+        ReadOnlyOption::Safe
+    }
+}
+
 // A constant represents invalid id of raft.
 pub const NONE: u64 = 0;
 
-pub struct Config {
+pub struct Config<T: Storage> {
     /// id is the identity of the local raft. ID cannot be 0.
     pub id: u64,
 
@@ -30,13 +49,71 @@ pub struct Config {
 	// unnecessary leader switching.
 	pub election_tick: usize,
 
-	// HeartbeatTick is the number of Node.Tick invocations that must pass between
-	// heartbeats. That is, a leader sends heartbeat messages to maintain its
-	// leadership every HeartbeatTick ticks.
+	/// HeartbeatTick is the number of Node.Tick invocations that must pass between
+	/// heartbeats. That is, a leader sends heartbeat messages to maintain its
+	/// leadership every HeartbeatTick ticks.
 	pub heartbeat_tick: usize,
+
+    /// Storage is the storage for raft. raft generates entries and states to be
+	/// stored in storage. raft reads the persisted entries and states out of
+	/// Storage when it needs. raft reads out the previous state and configuration
+	/// out of storage when restarting.
+	pub storage: Option<T>,
+
+    /// Applied is the last applied index. It should only be set when restarting
+	/// raft. raft will not return entries to the application smaller or equal to
+	/// Applied. If Applied is unset when restarting, raft might return previous
+	/// applied entries. This is a very application dependent configuration.
+	pub applied: u64,
+
+    /// max_size_per_msg limits the max size of each append message. Smaller value
+	/// lowers the raft recovery cost(initial probing and message lost during normal
+	/// operation). On the other side, it might affect the throughput during normal
+	/// replication. Note: math.MaxUint64 for unlimited, 0 for at most one entry per
+	/// message.
+	pub max_size_per_msg: u64,
+
+    /// max_inflight_msgs limits the max number of in-flight append messages during
+	/// optimistic replication phase. The application transportation layer usually
+	/// has its own sending buffer over TCP/UDP. Setting MaxInflightMsgs to avoid
+	/// overflowing that sending buffer. TODO (xiangli): feedback to application to
+	/// limit the proposal rate?
+	pub max_inflight_msgs: u64,
+
+    /// check_quorum specifies if the leader should check quorum activity. Leader
+	/// steps down when quorum is not active for an electionTimeout.
+	pub check_quorum: bool,
+
+    /// pre_vote enables the Pre-Vote algorithm described in raft thesis section
+	/// 9.6. This prevents disruption when a node that has been partitioned away
+	/// rejoins the cluster.
+	pub pre_vote: bool,
+
+    /// ReadOnlyOption specifies how the read only request is processed.
+	///
+	/// ReadOnlyOption::Safe guarantees the linearizability of the read only request by
+	/// communicating with the quorum. It is the default and suggested option.
+	///
+	/// ReadOnlyOption::LeaseBased ensures linearizability of the read only request by
+	/// relying on the leader lease. It can be affected by clock drift.
+	/// If the clock drift is unbounded, leader might keep the lease longer than it
+	/// should (clock can move backward/pause without any bound). ReadIndex is not safe
+	/// in that case.
+	/// CheckQuorum MUST be enabled if ReadOnlyOption is ReadOnlyOption::LeaseBased.
+	read_only_option: ReadOnlyOption,
+
+    /// disable_proposal_forwarding set to true means that followers will drop
+	/// proposals, rather than forwarding them to the leader. One use case for
+	/// this feature would be in a situation where the Raft leader is used to
+	/// compute the data of a proposal, for example, adding a timestamp from a
+	/// hybrid logical clock to data in a monotonically increasing way. Forwarding
+	/// should be disabled to prevent a follower with an innaccurate hybrid
+	/// logical clock from assigning the timestamp and then forwarding the data
+	/// to the leader.
+	disable_proposal_forwarding: bool,
 }
 
-impl Config {
+impl<T: Storage> Config<T> {
     fn validate(&self) -> Result<()> {
         if self.id == NONE {
             return Err(format_err!("invalid node id"));
@@ -45,7 +122,20 @@ impl Config {
         if self.heartbeat_tick == 0 {
             return Err(format_err!("heartbeat tick must greater than 0"))
         }
-        unimplemented!()
+
+        if self.storage.is_none() {
+            return Err(format_err!("storage cannot be None"))
+        }
+
+        if self.max_size_per_msg <= 0 {
+            return Err(format_err!("max inflight messages must be greater than 0"))
+        }
+
+        if self.read_only_option == ReadOnlyOption::LeaseBased && !self.check_quorum {
+		    return Err(format_err!("CheckQuorum must be enabled when ReadOnlyOption is ReadOnlyLeaseBased"))
+	    }
+
+        Ok(())
     }
 }
 
@@ -57,7 +147,7 @@ pub struct Raft<T: Storage> {
 }
 
 impl<T: Storage> Raft<T> {
-    fn new(c: &Config) -> Raft<T> {
+    fn new(c: &Config<T>) -> Raft<T> {
         c.validate().expect("");
         unimplemented!()
     }
