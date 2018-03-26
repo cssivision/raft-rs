@@ -1,5 +1,5 @@
 use storage::Storage;
-use raft_log::raftLog;
+use raft_log::RaftLog;
 use errors::Result;
 
 #[derive(Debug, PartialEq)]
@@ -143,11 +143,14 @@ impl<T: Storage> Config<T> {
 pub struct Raft<T: Storage> {
     pub id: u64,
     pub term: u64,
-    pub log: raftLog<T>,
+    pub log: RaftLog<T>,
+
+	/// tag only used for logger.
+	tag: String,
 }
 
 impl<T: Storage> Raft<T> {
-    fn new(c: &Config<T>) -> Raft<T> {
+    fn new(c: &Config<T>, tag: String) -> Raft<T> {
         c.validate().expect("");
         unimplemented!()
     }
