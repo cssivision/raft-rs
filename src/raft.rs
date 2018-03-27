@@ -24,7 +24,7 @@ impl Default for ReadOnlyOption {
 // A constant represents invalid id of raft.
 pub const NONE: u64 = 0;
 
-pub struct Config<T: Storage> {
+pub struct Config {
     /// id is the identity of the local raft. ID cannot be 0.
     pub id: u64,
 
@@ -53,12 +53,6 @@ pub struct Config<T: Storage> {
 	/// heartbeats. That is, a leader sends heartbeat messages to maintain its
 	/// leadership every HeartbeatTick ticks.
 	pub heartbeat_tick: usize,
-
-    /// Storage is the storage for raft. raft generates entries and states to be
-	/// stored in storage. raft reads the persisted entries and states out of
-	/// Storage when it needs. raft reads out the previous state and configuration
-	/// out of storage when restarting.
-	pub storage: Option<T>,
 
     /// Applied is the last applied index. It should only be set when restarting
 	/// raft. raft will not return entries to the application smaller or equal to
@@ -111,9 +105,12 @@ pub struct Config<T: Storage> {
 	/// logical clock from assigning the timestamp and then forwarding the data
 	/// to the leader.
 	disable_proposal_forwarding: bool,
+
+	/// tag used for logger.
+	tag: String,
 }
 
-impl<T: Storage> Config<T> {
+impl Config {
     fn validate(&self) -> Result<()> {
         if self.id == NONE {
             return Err(format_err!("invalid node id"));
@@ -121,10 +118,6 @@ impl<T: Storage> Config<T> {
 
         if self.heartbeat_tick == 0 {
             return Err(format_err!("heartbeat tick must greater than 0"))
-        }
-
-        if self.storage.is_none() {
-            return Err(format_err!("storage cannot be None"))
         }
 
         if self.max_size_per_msg <= 0 {
@@ -150,8 +143,14 @@ pub struct Raft<T: Storage> {
 }
 
 impl<T: Storage> Raft<T> {
-    fn new(c: &Config<T>, tag: String) -> Raft<T> {
-        c.validate().expect("");
+	/// Storage is the storage for raft. raft generates entries and states to be
+	/// stored in storage. raft reads the persisted entries and states out of
+	/// Storage when it needs. raft reads out the previous state and configuration
+	/// out of storage when restarting.
+    fn new(c: &Config, storage: T) -> Raft<T> {
+		c.validate().expect("configuration is invalid");
+		let rs = storage.initial_state().expect("initial state fail");
+		let raftLog = RaftLog::new(storage, c.tag.clone());
         unimplemented!()
     }
 }
