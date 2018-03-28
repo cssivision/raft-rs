@@ -82,17 +82,17 @@ impl MemStorageCore {
     /// Compact discards all log entries prior to compactIndex.
     /// It is the application's responsibility to not attempt to compact an index
     /// greater than raftLog.applied.
-    pub fn compact(&mut self, compactIndex: u64) -> Result<()> {
+    pub fn compact(&mut self, compact_index: u64) -> Result<()> {
         let offset = self.entries[0].get_index();
-        if compactIndex <= offset {
+        if compact_index <= offset {
             return Err(StorageError::ErrCompacted.into());
         }
 
-        if compactIndex > self.inner_last_index() {
-            panic!("compact {} is out of bound lastindex({})", compactIndex, self.inner_last_index());
+        if compact_index > self.inner_last_index() {
+            panic!("compact {} is out of bound lastindex({})", compact_index, self.inner_last_index());
         }
 
-        let i = (compactIndex - offset) as usize;
+        let i = (compact_index - offset) as usize;
         let entries = self.entries.drain(i..).collect();
         self.entries = entries;
         Ok(())
