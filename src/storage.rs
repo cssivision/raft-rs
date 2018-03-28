@@ -106,10 +106,67 @@ impl MemStorageCore {
         let first = self.entries[0].get_index() + 1;
         let last = ents[0].get_index() + ents.len() as u64 - 1;
 
+        // shortcut if there is no new entry.
         if last < first {
             return Ok(());
         }
+
+        // truncate compacted entries
+        let te: &[Entry] = if first > ents[0].get_index() {
+            let t = (first-ents[0].get_index()) as usize;
+            &ents[t..]
+        } else {
+            ents
+        };
+
+        let offset = ents[0].get_index() - self.entries[0].get_index();
+
+        if self.entries.len() as u64 > offset {
+            let mut new_entries: Vec<Entry> = vec![];
+            new_entries.extend_from_slice(&self.entries[..offset as usize]);
+            new_entries.extend_from_slice(te);
+            self.entries = new_entries;
+        } else if self.entries.len() as u64 == offset {
+            self.entries.extend_from_slice(te);
+        } else {
+            panic!(
+                "missing log entry [last: {}, append at: {}]",
+                self.inner_last_index(),
+                te[0].get_index(),
+            );
+        }
+
         Ok(())
+    }
+
+    pub fn create_snapshot(
+        &mut self, 
+        index: u64, 
+        cs: Option<ConfState>, 
+        data: Vec<u8>,
+    ) -> Result<&Snapshot> {
+        if index <= self.snapshot.get_metadata().get_index() {
+            return Err(StorageError::SnapshotOutOfDate.into());
+        }
+
+        let offset = self.entries[0].get_index();
+        if index > self.inner_last_index() {
+            panic!(
+                "snapshot {} is out of bound lastindex({})",
+                index,
+                self.inner_last_index(),
+            )
+        }
+
+        self.snapshot.mut_metadata().set_index(index);
+        self.snapshot.mut_metadata().set_term(self.entries[(index - offset) as usize].get_term());
+
+        if let Some(cs) = cs {
+            self.snapshot.mut_metadata().set_conf_state(cs);
+        }
+
+        self.snapshot.set_data(data);
+        Ok(&self.snapshot)
     }
 }
 
