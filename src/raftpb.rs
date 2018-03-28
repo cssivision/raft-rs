@@ -24,10 +24,10 @@ use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 #[derive(PartialEq,Clone,Default)]
 pub struct Entry {
     // message fields
-    pub Term: u64,
-    pub Index: u64,
-    pub Type: EntryType,
-    pub Data: ::std::vec::Vec<u8>,
+    pub term: u64,
+    pub index: u64,
+    pub field_type: EntryType,
+    pub data: ::std::vec::Vec<u8>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::protobuf::CachedSize,
@@ -51,107 +51,107 @@ impl Entry {
         }
     }
 
-    // uint64 Term = 1;
+    // uint64 term = 1;
 
-    pub fn clear_Term(&mut self) {
-        self.Term = 0;
+    pub fn clear_term(&mut self) {
+        self.term = 0;
     }
 
     // Param is passed by value, moved
-    pub fn set_Term(&mut self, v: u64) {
-        self.Term = v;
+    pub fn set_term(&mut self, v: u64) {
+        self.term = v;
     }
 
-    pub fn get_Term(&self) -> u64 {
-        self.Term
+    pub fn get_term(&self) -> u64 {
+        self.term
     }
 
-    fn get_Term_for_reflect(&self) -> &u64 {
-        &self.Term
+    fn get_term_for_reflect(&self) -> &u64 {
+        &self.term
     }
 
-    fn mut_Term_for_reflect(&mut self) -> &mut u64 {
-        &mut self.Term
+    fn mut_term_for_reflect(&mut self) -> &mut u64 {
+        &mut self.term
     }
 
-    // uint64 Index = 2;
+    // uint64 index = 2;
 
-    pub fn clear_Index(&mut self) {
-        self.Index = 0;
-    }
-
-    // Param is passed by value, moved
-    pub fn set_Index(&mut self, v: u64) {
-        self.Index = v;
-    }
-
-    pub fn get_Index(&self) -> u64 {
-        self.Index
-    }
-
-    fn get_Index_for_reflect(&self) -> &u64 {
-        &self.Index
-    }
-
-    fn mut_Index_for_reflect(&mut self) -> &mut u64 {
-        &mut self.Index
-    }
-
-    // .raftpb.EntryType Type = 3;
-
-    pub fn clear_Type(&mut self) {
-        self.Type = EntryType::EntryNormal;
+    pub fn clear_index(&mut self) {
+        self.index = 0;
     }
 
     // Param is passed by value, moved
-    pub fn set_Type(&mut self, v: EntryType) {
-        self.Type = v;
+    pub fn set_index(&mut self, v: u64) {
+        self.index = v;
     }
 
-    pub fn get_Type(&self) -> EntryType {
-        self.Type
+    pub fn get_index(&self) -> u64 {
+        self.index
     }
 
-    fn get_Type_for_reflect(&self) -> &EntryType {
-        &self.Type
+    fn get_index_for_reflect(&self) -> &u64 {
+        &self.index
     }
 
-    fn mut_Type_for_reflect(&mut self) -> &mut EntryType {
-        &mut self.Type
+    fn mut_index_for_reflect(&mut self) -> &mut u64 {
+        &mut self.index
     }
 
-    // bytes Data = 4;
+    // .raftpb.EntryType type = 3;
 
-    pub fn clear_Data(&mut self) {
-        self.Data.clear();
+    pub fn clear_field_type(&mut self) {
+        self.field_type = EntryType::EntryNormal;
     }
 
     // Param is passed by value, moved
-    pub fn set_Data(&mut self, v: ::std::vec::Vec<u8>) {
-        self.Data = v;
+    pub fn set_field_type(&mut self, v: EntryType) {
+        self.field_type = v;
+    }
+
+    pub fn get_field_type(&self) -> EntryType {
+        self.field_type
+    }
+
+    fn get_field_type_for_reflect(&self) -> &EntryType {
+        &self.field_type
+    }
+
+    fn mut_field_type_for_reflect(&mut self) -> &mut EntryType {
+        &mut self.field_type
+    }
+
+    // bytes data = 4;
+
+    pub fn clear_data(&mut self) {
+        self.data.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_data(&mut self, v: ::std::vec::Vec<u8>) {
+        self.data = v;
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_Data(&mut self) -> &mut ::std::vec::Vec<u8> {
-        &mut self.Data
+    pub fn mut_data(&mut self) -> &mut ::std::vec::Vec<u8> {
+        &mut self.data
     }
 
     // Take field
-    pub fn take_Data(&mut self) -> ::std::vec::Vec<u8> {
-        ::std::mem::replace(&mut self.Data, ::std::vec::Vec::new())
+    pub fn take_data(&mut self) -> ::std::vec::Vec<u8> {
+        ::std::mem::replace(&mut self.data, ::std::vec::Vec::new())
     }
 
-    pub fn get_Data(&self) -> &[u8] {
-        &self.Data
+    pub fn get_data(&self) -> &[u8] {
+        &self.data
     }
 
-    fn get_Data_for_reflect(&self) -> &::std::vec::Vec<u8> {
-        &self.Data
+    fn get_data_for_reflect(&self) -> &::std::vec::Vec<u8> {
+        &self.data
     }
 
-    fn mut_Data_for_reflect(&mut self) -> &mut ::std::vec::Vec<u8> {
-        &mut self.Data
+    fn mut_data_for_reflect(&mut self) -> &mut ::std::vec::Vec<u8> {
+        &mut self.data
     }
 }
 
@@ -169,24 +169,24 @@ impl ::protobuf::Message for Entry {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_uint64()?;
-                    self.Term = tmp;
+                    self.term = tmp;
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_uint64()?;
-                    self.Index = tmp;
+                    self.index = tmp;
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_enum()?;
-                    self.Type = tmp;
+                    self.field_type = tmp;
                 },
                 4 => {
-                    ::protobuf::rt::read_singular_proto3_bytes_into(wire_type, is, &mut self.Data)?;
+                    ::protobuf::rt::read_singular_proto3_bytes_into(wire_type, is, &mut self.data)?;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -200,17 +200,17 @@ impl ::protobuf::Message for Entry {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        if self.Term != 0 {
-            my_size += ::protobuf::rt::value_size(1, self.Term, ::protobuf::wire_format::WireTypeVarint);
+        if self.term != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.term, ::protobuf::wire_format::WireTypeVarint);
         }
-        if self.Index != 0 {
-            my_size += ::protobuf::rt::value_size(2, self.Index, ::protobuf::wire_format::WireTypeVarint);
+        if self.index != 0 {
+            my_size += ::protobuf::rt::value_size(2, self.index, ::protobuf::wire_format::WireTypeVarint);
         }
-        if self.Type != EntryType::EntryNormal {
-            my_size += ::protobuf::rt::enum_size(3, self.Type);
+        if self.field_type != EntryType::EntryNormal {
+            my_size += ::protobuf::rt::enum_size(3, self.field_type);
         }
-        if !self.Data.is_empty() {
-            my_size += ::protobuf::rt::bytes_size(4, &self.Data);
+        if !self.data.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(4, &self.data);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -218,17 +218,17 @@ impl ::protobuf::Message for Entry {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        if self.Term != 0 {
-            os.write_uint64(1, self.Term)?;
+        if self.term != 0 {
+            os.write_uint64(1, self.term)?;
         }
-        if self.Index != 0 {
-            os.write_uint64(2, self.Index)?;
+        if self.index != 0 {
+            os.write_uint64(2, self.index)?;
         }
-        if self.Type != EntryType::EntryNormal {
-            os.write_enum(3, self.Type.value())?;
+        if self.field_type != EntryType::EntryNormal {
+            os.write_enum(3, self.field_type.value())?;
         }
-        if !self.Data.is_empty() {
-            os.write_bytes(4, &self.Data)?;
+        if !self.data.is_empty() {
+            os.write_bytes(4, &self.data)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -275,24 +275,24 @@ impl ::protobuf::MessageStatic for Entry {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
-                    "Term",
-                    Entry::get_Term_for_reflect,
-                    Entry::mut_Term_for_reflect,
+                    "term",
+                    Entry::get_term_for_reflect,
+                    Entry::mut_term_for_reflect,
                 ));
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
-                    "Index",
-                    Entry::get_Index_for_reflect,
-                    Entry::mut_Index_for_reflect,
+                    "index",
+                    Entry::get_index_for_reflect,
+                    Entry::mut_index_for_reflect,
                 ));
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeEnum<EntryType>>(
-                    "Type",
-                    Entry::get_Type_for_reflect,
-                    Entry::mut_Type_for_reflect,
+                    "type",
+                    Entry::get_field_type_for_reflect,
+                    Entry::mut_field_type_for_reflect,
                 ));
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
-                    "Data",
-                    Entry::get_Data_for_reflect,
-                    Entry::mut_Data_for_reflect,
+                    "data",
+                    Entry::get_data_for_reflect,
+                    Entry::mut_data_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<Entry>(
                     "Entry",
@@ -306,10 +306,10 @@ impl ::protobuf::MessageStatic for Entry {
 
 impl ::protobuf::Clear for Entry {
     fn clear(&mut self) {
-        self.clear_Term();
-        self.clear_Index();
-        self.clear_Type();
-        self.clear_Data();
+        self.clear_term();
+        self.clear_index();
+        self.clear_field_type();
+        self.clear_data();
         self.unknown_fields.clear();
     }
 }
@@ -1492,10 +1492,10 @@ impl ::protobuf::reflect::ProtobufValue for ConfChangeType {
 }
 
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x13raftpb/raftpb.proto\x12\x06raftpb\"l\n\x05Entry\x12\x12\n\x04Term\
-    \x18\x01\x20\x01(\x04R\x04Term\x12\x14\n\x05Index\x18\x02\x20\x01(\x04R\
-    \x05Index\x12%\n\x04Type\x18\x03\x20\x01(\x0e2\x11.raftpb.EntryTypeR\x04\
-    Type\x12\x12\n\x04Data\x18\x04\x20\x01(\x0cR\x04Data\"n\n\x10SnapshotMet\
+    \n\x13raftpb/raftpb.proto\x12\x06raftpb\"l\n\x05Entry\x12\x12\n\x04term\
+    \x18\x01\x20\x01(\x04R\x04term\x12\x14\n\x05index\x18\x02\x20\x01(\x04R\
+    \x05index\x12%\n\x04type\x18\x03\x20\x01(\x0e2\x11.raftpb.EntryTypeR\x04\
+    type\x12\x12\n\x04data\x18\x04\x20\x01(\x0cR\x04data\"n\n\x10SnapshotMet\
     adata\x120\n\nconf_state\x18\x01\x20\x01(\x0b2\x11.raftpb.ConfStateR\tco\
     nfState\x12\x14\n\x05index\x18\x02\x20\x01(\x04R\x05index\x12\x12\n\x04t\
     erm\x18\x03\x20\x01(\x04R\x04term\"T\n\x08Snapshot\x12\x12\n\x04data\x18\

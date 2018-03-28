@@ -149,7 +149,7 @@ impl<T: Storage> Raft<T> {
 	/// out of storage when restarting.
     fn new(c: &Config, storage: T) -> Raft<T> {
 		c.validate().expect("configuration is invalid");
-		let rs = storage.initial_state().expect("initial state fail");
+		let (hard_state, conf_state) = storage.initial_state().unwrap();
 		let raftLog = RaftLog::new(storage, c.tag.clone());
         unimplemented!()
     }
