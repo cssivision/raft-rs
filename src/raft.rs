@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+
 use storage::Storage;
 use raft_log::RaftLog;
+use progress::Progress;
 use errors::Result;
+use raftpb::{Message};
 
 #[derive(Debug, PartialEq)]
 enum ReadOnlyOption {
@@ -132,11 +136,33 @@ impl Config {
     }
 }
 
+pub enum StateType {
+	Follower,
+	Candidate,
+	Leader,
+	PreCandidate,
+}
+
+impl Default for StateType {
+	fn default() -> StateType {
+		StateType::Follower
+	}
+}
+
 #[derive(Default)]
 pub struct Raft<T: Storage> {
     pub id: u64,
     pub term: u64,
-    pub log: RaftLog<T>,
+    pub raft_log: RaftLog<T>,
+	pub max_inflight: usize,
+	pub max_msg_size: usize,
+	prs: HashMap<u64, Progress>,
+	learner_prs: HashMap<u64, Progress>,
+	pub state: StateType,
+	pub is_learner: bool,
+	pub votes: HashMap<u64, bool>,
+	pub msgs: Vec<Message>,
+	pub lead: u64,
 
 	/// tag only used for logger.
 	tag: String,
@@ -149,8 +175,21 @@ impl<T: Storage> Raft<T> {
 	/// out of storage when restarting.
     fn new(c: &Config, storage: T) -> Raft<T> {
 		c.validate().expect("configuration is invalid");
-		let (hard_state, conf_state) = storage.initial_state().unwrap();
+		let (ref hard_state, ref conf_state) = storage.initial_state().unwrap();
 		let raftLog = RaftLog::new(storage, c.tag.clone());
+
+		let mut peers: &[u64] = &c.peers;
+		let mut learners: &[u64] = &c.learners;
+
+		if !conf_state.get_nodes().is_empty() || !conf_state.get_learners().is_empty() {
+			if !peers.is_empty() || !learners.is_empty() {
+				panic!("cannot specify both new(peers, learners) and ConfState.(Nodes, Learners)");
+			}
+
+			peers = &conf_state.get_nodes();
+			learners = &conf_state.get_learners();
+		}
+
         unimplemented!()
     }
 }

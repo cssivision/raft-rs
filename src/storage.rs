@@ -8,7 +8,7 @@ use errors::{Result, StorageError};
 pub const NO_LIMIT: u64 = u64::MAX;
 
 pub trait Storage {
-    /// initial_state returns the RaftState information
+    /// initial_state returns the saved HardState and ConfState information.
     fn initial_state(&self) -> Result<(HardState, ConfState)>;
 
     /// entries returns a slice of log entries in the range [lo,hi).

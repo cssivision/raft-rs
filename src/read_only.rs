@@ -1,0 +1,2 @@
+use raftpb::{Entry};
+
