@@ -1,7 +1,11 @@
+use std::u64;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use protobuf::Message;
 use raftpb::{ConfState, Entry, HardState, Snapshot};
 use errors::{Result, StorageError};
+
+pub const NO_LIMIT: u64 = u64::MAX;
 
 pub trait Storage {
     /// initial_state returns the RaftState information
@@ -201,7 +205,25 @@ impl Storage for MemStorage {
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
         let core = self.read_lock();
-        unimplemented!()
+        let offset = core.entries[0].get_index();
+        if low <= offset {
+            return Err(StorageError::ErrCompacted.into());
+        }
+
+        if high > core.inner_last_index() + 1 {
+            panic!("entries' hight({}) is out of bound lastindex({})", high, core.inner_last_index() + 1);
+        }
+
+        if core.entries.len() == 1 {
+            return Err(StorageError::ErrUnavailable.into());
+        }
+
+        let lo = (low - offset) as usize;
+        let hi = (high - offset) as usize;
+        let mut ents = core.entries[lo..hi].to_vec();
+
+        limit_size(&mut ents, max_size);
+        Ok(ents)
     }
 
     fn first_index(&self) -> Result<u64> {
@@ -214,11 +236,44 @@ impl Storage for MemStorage {
         Ok(core.inner_last_index())
     }
 
-    fn term(&self, idx: u64) -> Result<u64> {
-        unimplemented!()
+    fn term(&self, index: u64) -> Result<u64> {
+        let core = self.read_lock();
+        let offset = core.entries[0].get_index();
+
+        if index <= offset {
+            return Err(StorageError::ErrCompacted.into());
+        }
+        if index-offset >= core.entries.len() as u64 {
+            return Err(StorageError::ErrUnavailable.into());
+        }
+
+        Ok(core.entries[(index-offset) as usize].get_index())
     }
 
     fn snapshot(&self) -> Result<Snapshot> {
-        unimplemented!()
+        let core = self.read_lock();
+        Ok(core.snapshot.clone())
     }
+}
+
+pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
+    if max == NO_LIMIT || entries.len() <= 1 {
+        return;
+    }
+
+    let mut size = 0;
+    let limit = entries
+        .iter()
+        .take_while(|&e| {
+            if size == 0 {
+                size += u64::from(Message::compute_size(e));
+                true
+            } else {
+                size += u64::from(Message::compute_size(e));
+                size <= max
+            }
+        })
+        .count();
+
+    entries.truncate(limit);
 }

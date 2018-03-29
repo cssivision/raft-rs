@@ -10,4 +10,7 @@ pub enum StorageError {
 
     #[fail(display = "requested index is unavailable due to compaction")]
     ErrCompacted,
+
+    #[fail(display = "requested entry at index is unavailable")]
+    ErrUnavailable
 }
