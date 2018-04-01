@@ -283,6 +283,9 @@ impl<T: Storage> Raft<T> {
 
 	pub fn become_follower(&mut self, term: u64, lead: u64) {
 		self.reset(term);
+		self.state = StateType::Follower;
+		self.lead = lead;
+		info!("{} became follower at term {}", self.tag, self.term);
 	}
 
 	pub fn reset(&mut self, term: u64) {
@@ -296,9 +299,23 @@ impl<T: Storage> Raft<T> {
 		self.reset_randomized_election_timeout();
 		self.abort_leader_transfer();
 		self.votes = HashMap::new();
+
 		let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
 		let self_id = self.id;
-		// todo
+
+		for (&id, pr) in self.prs.iter_mut() {
+			*pr = Progress::new(last_index + 1, max_inflight as usize, false);
+			if id == self_id {
+				pr.matched = self.raft_log.last_index();
+			}
+		}
+		for (&id, pr) in self.learner_prs.iter_mut() {
+			*pr = Progress::new(last_index + 1, max_inflight as usize, true);
+			if id == self_id {
+				pr.matched = self.raft_log.last_index();
+			}
+		}
+
 		self.read_only = ReadOnly::new(self.read_only.option);
 		self.pending_conf_index = 0;
 	} 
