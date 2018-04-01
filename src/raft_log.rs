@@ -12,7 +12,7 @@ pub struct RaftLog<T: Storage> {
 
     /// committed is the highest log position that is known to be in
 	/// stable storage on a quorum of nodes.
-	committed: u64,
+	pub committed: u64,
 
     /// applied is the highest log position that the application has
 	/// been instructed to apply to its state machine.
@@ -46,5 +46,33 @@ impl<T: Storage> RaftLog<T> {
             unstable: Unstable::new(last_index+1, tag.clone()),
             tag: tag,
         }
+    }
+
+    pub fn last_index(&self) -> u64 {
+        if let Some(last_index) = self.unstable.maybe_last_index() {
+            return last_index;
+        }
+
+        match self.storage.last_index() {
+            Ok(last_index) => last_index,
+            Err(err) => panic!(err)
+        }
+    }
+
+    pub fn applied_to(&mut self, i: u64) {
+        if i == 0 {
+            return 
+        }
+
+        if i > self.committed || i < self.applied {
+            panic!(
+                "applied({}) is out of range [prev applied({}), committed({})]", 
+                i,
+                self.applied, 
+                self.committed,
+            );
+        }
+
+        self.applied = i;
     }
 }

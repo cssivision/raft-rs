@@ -4,26 +4,10 @@ use storage::Storage;
 use raft_log::RaftLog;
 use progress::Progress;
 use errors::Result;
-use raftpb::{Message};
+use raftpb::{Message, HardState};
+use read_only::{ReadOnlyOption, ReadOnly};
 
-#[derive(Debug, PartialEq)]
-enum ReadOnlyOption {
-    /// Safe guarantees the linearizability of the read only request by
-    /// communicating with the quorum. It is the default and suggested option.
-    Safe, 
-    /// LeaseBased ensures linearizability of the read only request by
-    /// relying on the leader lease. It can be affected by clock drift.
-    /// If the clock drift is unbounded, leader might keep the lease longer than it
-    /// should (clock can move backward/pause without any bound). ReadIndex is not safe
-    /// in that case.
-    LeaseBased,
-}
-
-impl Default for ReadOnlyOption {
-    fn default() -> ReadOnlyOption {
-        ReadOnlyOption::Safe
-    }
-}
+use rand::{self, Rng};
 
 // A constant represents invalid id of raft.
 pub const NONE: u64 = 0;
@@ -45,20 +29,20 @@ pub struct Config {
 	/// entries from the leader node. It does not vote or promote itself.
 	pub learners: Vec<u64>,
 
-    // ElectionTick is the number of Node.Tick invocations that must pass between
+    // election_tick is the number of Node.Tick invocations that must pass between
 	// elections. That is, if a follower does not receive any message from the
-	// leader of current term before ElectionTick has elapsed, it will become
-	// candidate and start an election. ElectionTick must be greater than
-	// HeartbeatTick. We suggest ElectionTick = 10 * HeartbeatTick to avoid
+	// leader of current term before election_tick has elapsed, it will become
+	// candidate and start an election. election_tick must be greater than
+	// HeartbeatTick. We suggest election_tick = 10 * heartbeat_tick to avoid
 	// unnecessary leader switching.
-	pub election_tick: usize,
+	pub election_tick: u64,
 
-	/// HeartbeatTick is the number of Node.Tick invocations that must pass between
+	/// heartbeat_tick is the number of Node.Tick invocations that must pass between
 	/// heartbeats. That is, a leader sends heartbeat messages to maintain its
-	/// leadership every HeartbeatTick ticks.
-	pub heartbeat_tick: usize,
+	/// leadership every heartbeat_tick ticks.
+	pub heartbeat_tick: u64,
 
-    /// Applied is the last applied index. It should only be set when restarting
+    /// applied is the last applied index. It should only be set when restarting
 	/// raft. raft will not return entries to the application smaller or equal to
 	/// Applied. If Applied is unset when restarting, raft might return previous
 	/// applied entries. This is a very application dependent configuration.
@@ -153,16 +137,55 @@ impl Default for StateType {
 pub struct Raft<T: Storage> {
     pub id: u64,
     pub term: u64,
+	pub vote: u64,
     pub raft_log: RaftLog<T>,
-	pub max_inflight: usize,
-	pub max_msg_size: usize,
+	pub max_inflight: u64,
+	pub max_msg_size: u64,
 	prs: HashMap<u64, Progress>,
 	learner_prs: HashMap<u64, Progress>,
 	pub state: StateType,
 	pub is_learner: bool,
 	pub votes: HashMap<u64, bool>,
 	pub msgs: Vec<Message>,
+
+	// the leader id
 	pub lead: u64,
+
+	// lead_transferee is id of the leader transfer target when its value is not zero.
+	// Follow the procedure defined in raft thesis 3.10.
+	pub lead_transferee: u64,
+
+	// Only one conf change may be pending (in the log, but not yet
+	// applied) at a time. This is enforced via pending_conf_index, which
+	// is set to a value >= the log index of the latest pending
+	// configuration change (if any). Config changes are only allowed to
+	// be proposed if the leader's applied index is greater than this
+	// value.
+	pub pending_conf_index: u64,
+
+	pub read_only: ReadOnly,
+
+	// number of ticks since it reached last electionTimeout when it is leader
+	// or candidate.
+	// number of ticks since it reached last electionTimeout or received a
+	// valid message from current leader when it is a follower.
+	pub election_elapsed: u64,
+
+	// number of ticks since it reached last heartbeat_timeout.
+	// only leader keeps heartbeat_elapsed.
+	pub heartbeat_elapsed: u64,
+
+	pub check_quorum: bool,
+	pub pre_vote:     bool,
+
+	pub heartbeat_timeout: u64,
+	pub election_timeout: u64,
+
+	// randomized_election_timeout is a random number between
+	// [electiontimeout, 2 * electiontimeout - 1]. It gets reset
+	// when raft changes its state to follower or candidate.
+	pub randomized_election_timeout: u64,
+	pub disable_proposal_forwarding: bool,
 
 	/// tag only used for logger.
 	tag: String,
@@ -173,10 +196,10 @@ impl<T: Storage> Raft<T> {
 	/// stored in storage. raft reads the persisted entries and states out of
 	/// Storage when it needs. raft reads out the previous state and configuration
 	/// out of storage when restarting.
-    fn new(c: &Config, storage: T) -> Raft<T> {
+    pub fn new(c: &Config, storage: T) -> Raft<T> {
 		c.validate().expect("configuration is invalid");
-		let (ref hard_state, ref conf_state) = storage.initial_state().unwrap();
-		let raftLog = RaftLog::new(storage, c.tag.clone());
+		let (hard_state, conf_state) = storage.initial_state().unwrap();
+		let raft_log = RaftLog::new(storage, c.tag.clone());
 
 		let mut peers: &[u64] = &c.peers;
 		let mut learners: &[u64] = &c.learners;
@@ -190,6 +213,108 @@ impl<T: Storage> Raft<T> {
 			learners = &conf_state.get_learners();
 		}
 
+		let mut r = Raft{
+			id: c.id,
+			term: Default::default(),
+			vote: Default::default(),
+			raft_log: raft_log,
+			max_msg_size: c.max_size_per_msg,
+			max_inflight: c.max_inflight_msgs,
+			prs: HashMap::new(),
+			learner_prs: HashMap::new(),
+			state: Default::default(),
+			is_learner: false,
+			votes: HashMap::new(),
+			msgs: Default::default(),
+			lead: NONE,
+			lead_transferee: Default::default(),
+			pending_conf_index: Default::default(),
+			read_only: ReadOnly::new(c.read_only_option.clone()),
+			election_elapsed: Default::default(),
+			heartbeat_elapsed: Default::default(),
+			check_quorum: c.check_quorum,
+			pre_vote: c.pre_vote,
+			heartbeat_timeout: c.heartbeat_tick,
+			election_timeout: c.election_tick,
+			randomized_election_timeout: Default::default(),
+			tag: c.tag.clone(),
+			disable_proposal_forwarding: c.disable_proposal_forwarding,
+		};
+
+		for &p in peers {
+			r.prs.insert(p, Progress::new(1, r.max_inflight as usize, false));
+		}
+		for &p in learners {
+			if r.prs.contains_key(&p) {
+				panic!("node {} in both learner and peer list", p);
+			}
+			r.learner_prs.insert(p, Progress::new(1, r.max_inflight as usize, true));
+			if r.id == p {
+				r.is_learner = true;
+			}
+		}
+		if hard_state != HardState::new() {
+			r.load_state(hard_state);
+		}
+
+		if c.applied > 0 {
+			r.raft_log.applied_to(c.applied);
+		}
+		let term = r.term;
+		r.become_follower(term, NONE);
+
         unimplemented!()
     }
+
+	pub fn load_state(&mut self, state: HardState) {
+		if state.commit < self.raft_log.committed || state.commit > self.raft_log.last_index() {
+			panic!(
+				"{} state.commit {} is out of range [{}, {}]", 
+				self.id, 
+				state.commit, 
+				self.raft_log.committed,
+				self.raft_log.last_index(),
+			);
+		}
+		self.raft_log.committed = state.commit;
+		self.term = state.term;
+		self.vote = state.vote;
+	}
+
+	pub fn become_follower(&mut self, term: u64, lead: u64) {
+		self.reset(term);
+	}
+
+	pub fn reset(&mut self, term: u64) {
+		if self.term != term {
+			self.term = term;
+			self.vote = NONE;
+		}
+		self.lead = NONE;
+		self.election_elapsed = 0;
+		self.heartbeat_elapsed = 0;
+		self.reset_randomized_election_timeout();
+		self.abort_leader_transfer();
+		self.votes = HashMap::new();
+		let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
+		let self_id = self.id;
+		// todo
+		self.read_only = ReadOnly::new(self.read_only.option);
+		self.pending_conf_index = 0;
+	} 
+
+	fn reset_randomized_election_timeout(&mut self) {
+		let prev_timeout = self.randomized_election_timeout;
+		let timeout = self.election_timeout + rand::thread_rng().gen_range(0, self.election_timeout);
+		debug!(
+            "{} reset election timeout {} -> {} at {}",
+            self.tag, prev_timeout, timeout, self.election_elapsed
+        );
+
+		self.randomized_election_timeout = timeout;
+	}
+
+	pub fn abort_leader_transfer(&mut self) {
+		self.lead_transferee = NONE;
+	}
 }

@@ -10,6 +10,7 @@ extern crate protobuf;
 extern crate failure;
 #[macro_use] 
 extern crate failure_derive;
+extern crate rand;
 
 mod raftpb;
 mod storage;
