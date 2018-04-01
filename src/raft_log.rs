@@ -75,4 +75,12 @@ impl<T: Storage> RaftLog<T> {
 
         self.applied = i;
     }
+
+    pub fn last_term(&self) -> u64 {
+        unimplemented!()
+    }
+
+    pub fn get_applied(&self) -> u64 {
+        self.applied
+    }
 }

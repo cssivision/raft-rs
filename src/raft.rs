@@ -82,7 +82,7 @@ pub struct Config {
 	/// should (clock can move backward/pause without any bound). ReadIndex is not safe
 	/// in that case.
 	/// CheckQuorum MUST be enabled if ReadOnlyOption is ReadOnlyOption::LeaseBased.
-	read_only_option: ReadOnlyOption,
+	pub read_only_option: ReadOnlyOption,
 
     /// disable_proposal_forwarding set to true means that followers will drop
 	/// proposals, rather than forwarding them to the leader. One use case for
@@ -92,14 +92,14 @@ pub struct Config {
 	/// should be disabled to prevent a follower with an innaccurate hybrid
 	/// logical clock from assigning the timestamp and then forwarding the data
 	/// to the leader.
-	disable_proposal_forwarding: bool,
+	pub disable_proposal_forwarding: bool,
 
 	/// tag used for logger.
-	tag: String,
+	pub tag: String,
 }
 
 impl Config {
-    fn validate(&self) -> Result<()> {
+    fn validate(&mut self) -> Result<()> {
         if self.id == NONE {
             return Err(format_err!("invalid node id"));
         }
@@ -115,6 +115,9 @@ impl Config {
         if self.read_only_option == ReadOnlyOption::LeaseBased && !self.check_quorum {
 		    return Err(format_err!("check_quorum must be enabled when ReadOnlyOption is ReadOnlyOption::LeaseBased"))
 	    }
+		if self.tag.is_empty() {
+			self.tag = "raft_log: ".to_string();
+		}
 
         Ok(())
     }
@@ -196,7 +199,7 @@ impl<T: Storage> Raft<T> {
 	/// stored in storage. raft reads the persisted entries and states out of
 	/// Storage when it needs. raft reads out the previous state and configuration
 	/// out of storage when restarting.
-    pub fn new(c: &Config, storage: T) -> Raft<T> {
+    pub fn new(c: &mut Config, storage: T) -> Raft<T> {
 		c.validate().expect("configuration is invalid");
 		let (hard_state, conf_state) = storage.initial_state().unwrap();
 		let raft_log = RaftLog::new(storage, c.tag.clone());
@@ -262,8 +265,18 @@ impl<T: Storage> Raft<T> {
 		}
 		let term = r.term;
 		r.become_follower(term, NONE);
-
-        unimplemented!()
+		info!(
+            "{} newRaft [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
+             last_term: {}]",
+            r.tag,
+            r.nodes(),
+            r.term,
+            r.raft_log.committed,
+            r.raft_log.get_applied(),
+            r.raft_log.last_index(),
+            r.raft_log.last_term()
+        );
+		r 
     }
 
 	pub fn load_state(&mut self, state: HardState) {
@@ -333,5 +346,11 @@ impl<T: Storage> Raft<T> {
 
 	pub fn abort_leader_transfer(&mut self) {
 		self.lead_transferee = NONE;
+	}
+
+	fn nodes(&self) -> Vec<u64> {
+		let mut nodes: Vec<u64> = self.prs.iter().map(|(&id, _)| id).collect();
+		nodes.sort();
+		nodes
 	}
 }
