@@ -360,4 +360,37 @@ impl<T: Storage> Raft<T> {
 		nodes.sort();
 		nodes
 	}
+
+	pub fn add_node(&mut self, id: u64) {
+		self.add_node_or_learner_node(id, false);
+	}
+
+	pub fn add_learner(&mut self, id: u64) {
+		self.add_node_or_learner_node(id, true);
+	}
+
+	pub fn add_node_or_learner_node(&mut self, id: u64, is_learner: bool) {
+		unimplemented!()
+	}
+
+	fn get_progress(&self, id: u64) -> Option<&Progress> {
+		self.prs.get(&id).or(self.learner_prs.get(&id))
+	}
+
+	fn set_progress(&mut self, id: u64, matched: u64, next: u64, is_learner: bool) {
+		if !is_learner {
+			self.learner_prs.remove(&id);
+			let mut pr = Progress::new(next, self.max_inflight as usize, is_learner);
+			pr.matched = matched;
+			self.prs.insert(id, pr);
+			return
+		}
+
+		if self.prs.contains_key(&id) {
+			panic!("{} unexpected changing from voter to learner for {}", self.id, id);
+		}
+		let mut pr = Progress::new(next, self.max_inflight as usize, is_learner);
+		pr.matched = matched;
+		self.learner_prs.insert(id, pr);
+	}
 }

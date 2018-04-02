@@ -103,14 +103,14 @@ pub struct Progress {
     pub pending_snapshot: u64,
     pub recent_active: bool,
     pub ins: Inflights,
-    pub is_lenarner: bool,
+    pub is_learner: bool,
 }
 
 impl Progress {
-    pub fn new(next: u64, ins_size: usize, is_lenarner: bool) -> Progress {
+    pub fn new(next: u64, ins_size: usize, is_learner: bool) -> Progress {
         Progress{
             next: next,
-            is_lenarner: is_lenarner, 
+            is_learner: is_learner, 
             ins: Inflights::new(ins_size),
             ..Default::default()
         }

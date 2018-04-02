@@ -18,7 +18,7 @@ pub struct RaftLog<T: Storage> {
     /// applied is the highest log position that the application has
 	/// been instructed to apply to its state machine.
 	/// Invariant: applied <= committed
-	applied: u64,
+	pub applied: u64,
 
     /// tag only used for logger.
     tag: String,
@@ -89,10 +89,15 @@ impl<T: Storage> RaftLog<T> {
         &self.storage
     }
 
-    pub fn append(&self, ents: Vec<Entry>) -> u64 {
+    pub fn append(&mut self, ents: &[Entry]) -> u64 {
         if ents.is_empty() {
             return self.last_index();
         }
-        unimplemented!()
+        let after = ents[0].get_index() - 1;
+        if after < self.committed {
+            panic!("after({}) is out of range [committed({})]", after, self.committed);
+        }
+        self.unstable.truncate_and_append(ents);
+        self.last_index()
     } 
 }

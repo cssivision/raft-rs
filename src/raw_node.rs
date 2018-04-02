@@ -1,3 +1,4 @@
+use errors::Result;
 use raft::{Raft, Config, NONE, StateType, Peer};
 use storage::{Storage, MemStorage};
 use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType};
@@ -19,7 +20,7 @@ pub struct RawNode<T: Storage> {
 }
 
 impl<T: Storage> RawNode<T> {
-    pub fn new(c: &mut Config, storage: T, mut peers: Vec<Peer>) -> RawNode<T> {
+    pub fn new(c: &mut Config, storage: T, mut peers: Vec<Peer>) -> Result<RawNode<T>> {
         if c.id == 0 {
             panic!("config id must not be zero");
         }
@@ -48,10 +49,15 @@ impl<T: Storage> RawNode<T> {
                 ent.set_term(1);
                 ent.set_data(data);
                 ent.set_index(i as u64+1);
-                ents[i] = ent;
+                ents.push(ent);
             }
-            rn.raft.raft_log.append(ents);
+            rn.raft.raft_log.append(&ents);
+            rn.raft.raft_log.committed = ents.len() as u64;
+
+            for peer in peers {
+                rn.raft.add_node(peer.id);
+            }
         }
-        unimplemented!()
+        Ok(rn)
     }
 }

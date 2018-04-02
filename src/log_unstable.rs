@@ -42,4 +42,47 @@ impl Unstable {
             len => Some(self.offset + len as u64 - 1),
         }
     } 
+
+    pub fn truncate_and_append(&mut self, ents: &[Entry]) {
+        if ents.is_empty() {
+            return
+        }
+        let after = ents[0].get_index();
+        if after == self.offset + self.entries.len() as u64 {
+            self.entries.extend_from_slice(ents);
+        } else if after <= self.offset {
+            self.offset = after;
+            self.entries.clear();
+            self.entries.extend_from_slice(ents);
+        } else {
+            info!("truncate the unstable entries before index {}", after);
+            let off = self.offset;
+            self.must_check_outofbounds(off, after);
+            self.entries.truncate((after-off) as usize);
+            self.entries.extend_from_slice(ents);
+        }
+    }
+
+    pub fn slice(&self, lo: u64, hi: u64) -> &[Entry] {
+        self.must_check_outofbounds(lo, hi);
+        let l = lo as usize;
+        let h = hi as usize;
+        let off = self.offset as usize;
+        &self.entries[l - off..h - off]
+    }
+
+    pub fn must_check_outofbounds(&self, low: u64, hight: u64) {
+        if low > hight {
+            panic!("invlid unstable slice {} > {}", low, hight);
+        }
+
+        let upper = self.offset + self.entries.len() as u64;
+        if low < self.offset || hight > upper {
+            panic!(
+                "unstable.slice[{},{}) out of bound [{},{}]",
+                low, hight,
+                self.offset, upper,
+            );   
+        }
+    }
 }
