@@ -9,7 +9,7 @@ enum EntryType {
 message Entry {
 	uint64     term  = 1; // must be 64-bit aligned for atomic operations
 	uint64     index = 2; // must be 64-bit aligned for atomic operations
-	EntryType  type  = 3;
+	EntryType  entry_type  = 3;
 	bytes      data  = 4;
 }
 
@@ -59,4 +59,11 @@ message Message {
     bool reject = 10;
     uint64 reject_hint = 11;
     bytes context = 12;
+}
+
+message ConfChange {
+	uint64          id      = 1;
+	ConfChangeType  change_type = 2;
+	uint64          node_id = 3;
+	bytes           context = 4;
 }

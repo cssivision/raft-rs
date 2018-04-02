@@ -1,10 +1,11 @@
 use storage::Storage;
 use log_unstable::Unstable;
+use raftpb::{Entry};
 
 #[derive(Default)]
 pub struct RaftLog<T: Storage> {
     /// storage contains all stable entries since the last snapshot.
-    storage: T,
+    pub storage: T,
 
     /// unstable contains all unstable entries and snapshot.
 	/// they will be saved into storage.
@@ -83,4 +84,15 @@ impl<T: Storage> RaftLog<T> {
     pub fn get_applied(&self) -> u64 {
         self.applied
     }
+
+    pub fn get_storage(&self) -> &T {
+        &self.storage
+    }
+
+    pub fn append(&self, ents: Vec<Entry>) -> u64 {
+        if ents.is_empty() {
+            return self.last_index();
+        }
+        unimplemented!()
+    } 
 }

@@ -123,6 +123,7 @@ impl Config {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub enum StateType {
 	Follower,
 	Candidate,
@@ -134,6 +135,12 @@ impl Default for StateType {
 	fn default() -> StateType {
 		StateType::Follower
 	}
+}
+
+#[derive(Debug, Default)]
+pub struct Peer {
+	pub id: u64,
+	pub context: Vec<u8>,
 }
 
 #[derive(Default)]

@@ -195,6 +195,19 @@ impl MemStorage {
     fn write_lock(&self) -> RwLockWriteGuard<MemStorageCore> {
         self.core.write().unwrap()
     }
+
+     /// set_hardstate saves the current HardState.
+    pub fn set_hardstate(&mut self, hs: HardState) {
+        self.write_lock().set_hardstate(hs);
+    }
+
+    pub fn append(&mut self, ents: &[Entry]) -> Result<()> {
+        self.write_lock().append(ents)
+    }
+
+    pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
+        self.write_lock().apply_snapshot(snapshot)
+    }
 }
 
 impl Storage for MemStorage {
