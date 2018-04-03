@@ -4,7 +4,7 @@ use storage::Storage;
 use raft_log::RaftLog;
 use progress::Progress;
 use errors::Result;
-use raftpb::{Message, HardState};
+use raftpb::{Message, HardState, MessageType};
 use read_only::{ReadOnlyOption, ReadOnly};
 use raw_node::SoftState;
 
@@ -12,6 +12,15 @@ use rand::{self, Rng};
 
 // A constant represents invalid id of raft.
 pub const NONE: u64 = 0;
+
+// CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
+// Config.pre_vote is true.
+const CAMPAIGN_PRE_ELECTION: &[u8] = b"CampaignPreElection";
+// CAMPAIGN_ELECTION represents a normal (time-based) election (the second phase
+// of the election when Config.pre_vote is true).
+const CAMPAIGN_ELECTION: &[u8] = b"CampaignElection";
+// CAMPAIGN_TRANSFER represents the type of leader transfer.
+const CAMPAIGN_TRANSFER: &[u8] = b"CampaignTransfer";
 
 pub struct Config {
     /// id is the identity of the local raft. ID cannot be 0.
@@ -439,4 +448,95 @@ impl<T: Storage> Raft<T> {
         hs.set_commit(self.raft_log.committed);
         hs
 	}
+
+	/// tick_election is run by followers and candidates after election_timeout.
+	pub fn tick_election(&mut self) {
+		self.election_elapsed += 1;
+		if self.promotable() && self.past_election_timeout() {
+			self.election_elapsed = 0;
+			let mut msg = Message::new();
+			msg.set_from(self.id);
+			msg.set_msg_type(MessageType::MsgHup);
+			self.step(msg).is_ok();
+		}
+	} 
+
+	/// promotable indicates whether state machine can be promoted to leader,
+	/// which is true when its own id is in progress list.
+	pub fn promotable(&self) -> bool {
+		self.prs.contains_key(&self.id)
+	}
+
+	/// past_election_timeout returns true iff r.electionElapsed is greater
+	/// than or equal to the randomized election timeout in
+	/// [electiontimeout, 2 * electiontimeout - 1].
+	pub fn past_election_timeout(&self) -> bool {
+		self.election_elapsed >= self.randomized_election_timeout
+	}
+
+	pub fn step(&mut self, msg: Message) -> Result<()> {
+		// Handle the message term, which may result in our stepping down to a follower.
+		if msg.get_term() == 0 {
+			// local message
+		} else if msg.get_term() > self.term {
+			if msg.get_msg_type() == MessageType::MsgVote || msg.get_msg_type() == MessageType::MsgPreVote {
+				let force = msg.get_context() == CAMPAIGN_TRANSFER;
+				let in_lease = self.check_quorum && self.lead != NONE && self.election_elapsed < self.election_timeout;
+
+				if !force && in_lease {
+					// If a server receives a RequestVote request within the minimum election timeout
+					// of hearing from a current leader, it does not update its term or grant its vote
+					info!(
+						"{} {} [logterm: {}, index: {}, vote: {}] ignored {:?} from {} [logterm: {}, index: {}] at term {}: lease is not expired (remaining ticks: {})",
+						self.tag,
+						self.id, 
+						self.raft_log.last_term(), 
+						self.raft_log.last_index(), 
+						self.vote, 
+						msg.get_msg_type(), 
+						msg.get_from(), 
+						msg.get_log_term(), 
+						msg.get_index(), 
+						self.term, 
+						self.election_timeout-self.election_elapsed
+					)
+				}
+			}
+			if msg.get_msg_type() == MessageType::MsgPreVote {
+				// Never change our term in response to a PreVote
+			} else if msg.get_msg_type() == MessageType::MsgPreVoteResp && !msg.get_reject() {
+				// We send pre-vote requests with a term in our future. If the
+				// pre-vote is granted, we will increment our term when we get a
+				// quorum. If it is not, the term comes from the node that
+				// rejected our vote so we should become a follower at the new
+				// term.
+			} else {
+				info!(
+					"{} {} [term: {}] received a {:?} message with higher term from {} [term: {}]",
+					self.tag,
+					self.id, 
+					self.term, 
+					msg.get_msg_type(), 
+					msg.get_from(), 
+					msg.get_term(),
+				);
+
+				if msg.get_msg_type() == MessageType::MsgApp 
+					|| msg.get_msg_type() == MessageType::MsgHeartbeat 
+					|| msg.get_msg_type() == MessageType::MsgSnap {
+					self.become_follower(msg.get_term(), msg.get_from());
+				} else {
+					self.become_follower(msg.get_term(), NONE);
+				}
+			}
+		} else if msg.get_term() < self.term {
+
+		}
+		Ok(())
+	}
+
+	// send persists state to stable storage and then sends to its mailbox.
+	fn send(&self, mut msg: Message) {
+		msg.set_from(self.id);
+	} 
 }
