@@ -283,7 +283,7 @@ impl<T: Storage> Raft<T> {
 		let term = r.term;
 		r.become_follower(term, NONE);
 		info!(
-            "{} newRaft [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
+            "{} newRaft [peers: {:?}, term: {}, commit: {}, applied: {}, last_index: {}, \
              last_term: {}]",
             r.tag,
             r.nodes(),
@@ -390,7 +390,7 @@ impl<T: Storage> Raft<T> {
 			return
 		} else if self.learner_prs.contains_key(&id) {
 			if is_learner {
-                // Ignore redundant add learner.
+                // ignore redundant add learner.
                 return;
             }
 			self.promote_learner(id);
@@ -502,6 +502,7 @@ impl<T: Storage> Raft<T> {
 					)
 				}
 			}
+
 			if msg.get_msg_type() == MessageType::MsgPreVote {
 				// Never change our term in response to a PreVote
 			} else if msg.get_msg_type() == MessageType::MsgPreVoteResp && !msg.get_reject() {
@@ -530,13 +531,101 @@ impl<T: Storage> Raft<T> {
 				}
 			}
 		} else if msg.get_term() < self.term {
+			if (self.check_quorum || self.pre_vote) 
+				&& (msg.get_msg_type() == MessageType::MsgHeartbeat 
+				|| msg.get_msg_type() == MessageType::MsgApp) {
+				// We have received messages from a leader at a lower term. It is possible
+				// that these messages were simply delayed in the network, but this could
+				// also mean that this node has advanced its term number during a network
+				// partition, and it is now unable to either win an election or to rejoin
+				// the majority on the old term. If check_quorum is false, this will be
+				// handled by incrementing term numbers in response to MsgVote with a
+				// higher term, but if check_quorum is true we may not advance the term on
+				// MsgVote and must generate other messages to advance the term. The net
+				// result of these two features is to minimize the disruption caused by
+				// nodes that have been removed from the cluster's configuration: a
+				// removed node will send MsgVotes (or MsgPreVotes) which will be ignored,
+				// but it will not receive MsgApp or MsgHeartbeat, so it will not create
+				// disruptive term increases
+				// The above comments also true for Pre-Vote
 
+				let mut m = Message::new();
+				m.set_to(msg.get_from());
+				m.set_msg_type(MessageType::MsgAppResp);
+				self.send(m);
+			} else if msg.get_msg_type() == MessageType::MsgPreVote {
+				info!(
+					"{} {} [logterm: {}, index: {}, vote: {}] rejected {:?} from {} [logterm: {}, index: {}] at term {}",
+					self.tag,
+					self.id, 
+					self.raft_log.last_term(), 
+					self.raft_log.last_index(), 
+					self.vote, 
+					msg.get_msg_type(), 
+					msg.get_from(), 
+					msg.get_log_term(), 
+					msg.get_index(), 
+					self.term,
+				);
+				let mut m = Message::new();
+				m.set_to(msg.get_from());
+				m.set_term(self.term);
+				m.set_msg_type(MessageType::MsgPreVoteResp);
+				m.set_reject(true);
+				self.send(m);
+			} else {
+				info!(
+					"{} {} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
+					self.tag,
+					self.id, 
+					self.term,
+					msg.get_msg_type(), 
+					msg.get_from(), 
+					msg.get_term(),
+				)
+			}
+			return Ok(());
 		}
+		
 		Ok(())
 	}
 
 	// send persists state to stable storage and then sends to its mailbox.
-	fn send(&self, mut msg: Message) {
+	fn send(&mut self, mut msg: Message) {
 		msg.set_from(self.id);
+
+		if msg.get_msg_type() == MessageType::MsgVote 
+			|| msg.get_msg_type() == MessageType::MsgVoteResp 
+			|| msg.get_msg_type() == MessageType::MsgPreVote 
+			|| msg.get_msg_type() == MessageType::MsgPreVoteResp {
+			if msg.get_term() == 0 {
+				// All {pre-,}campaign messages need to have the term set when
+				// sending.
+				// - MsgVote: msg.term is the term the node is campaigning for,
+				//   non-zero as we increment the term when campaigning.
+				// - MsgVoteResp: msg.term is the new self.term if the MsgVote was
+				//   granted, non-zero for the same reason MsgVote is
+				// - MsgPreVote: msg.term is the term the node will campaign,
+				//   non-zero as we use m.Term to indicate the next term we'll be
+				//   campaigning for
+				// - MsgPreVoteResp: msg.term is the term received in the original
+				//   MsgPreVote if the pre-vote was granted, non-zero for the
+				//   same reasons MsgPreVote is
+				panic!("term should be set when sending {:?}", msg.get_msg_type());
+			}
+		} else {
+			if msg.get_term() != 0 {
+				panic!("term should not be set when sending {:?} (was {})", msg.get_msg_type(), msg.get_term());
+			}
+
+			// do not attach term to MsgProp, MsgReadIndex
+			// proposals are a way to forward to the leader and
+			// should be treated as local message.
+			// MsgReadIndex is also forwarded to leader.
+			if msg.get_msg_type() == MessageType::MsgProp || msg.get_msg_type() == MessageType::MsgReadIndex {
+				msg.set_term(self.term);
+			}
+		}
+		self.msgs.push(msg);
 	} 
 }

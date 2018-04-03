@@ -21,3 +21,4 @@ mod log_unstable;
 mod progress;
 mod read_only;
 mod raw_node;
+mod util;
