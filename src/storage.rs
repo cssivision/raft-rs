@@ -61,7 +61,7 @@ impl MemStorageCore {
     }
 
     /// set_hardstate saves the current HardState.
-    pub fn set_hardstate(&mut self, hs: HardState) {
+    pub fn set_hard_state(&mut self, hs: HardState) {
         self.hard_state = hs;
     }
 
@@ -197,8 +197,8 @@ impl MemStorage {
     }
 
      /// set_hardstate saves the current HardState.
-    pub fn set_hardstate(&mut self, hs: HardState) {
-        self.write_lock().set_hardstate(hs);
+    pub fn set_hard_state(&mut self, hs: HardState) {
+        self.write_lock().set_hard_state(hs);
     }
 
     pub fn append(&mut self, ents: &[Entry]) -> Result<()> {

@@ -6,6 +6,7 @@ use progress::Progress;
 use errors::Result;
 use raftpb::{Message, HardState};
 use read_only::{ReadOnlyOption, ReadOnly};
+use raw_node::SoftState;
 
 use rand::{self, Rng};
 
@@ -123,7 +124,7 @@ impl Config {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum StateType {
 	Follower,
 	Candidate,
@@ -370,11 +371,41 @@ impl<T: Storage> Raft<T> {
 	}
 
 	pub fn add_node_or_learner_node(&mut self, id: u64, is_learner: bool) {
-		unimplemented!()
+		if self.prs.contains_key(&id) {
+			if is_learner {
+				info!(
+                    "{} ignored add learner: do not support changing {} from voter to learner",
+                    self.tag, id
+                );
+			}
+			return
+		} else if self.learner_prs.contains_key(&id) {
+			if is_learner {
+                // Ignore redundant add learner.
+                return;
+            }
+			self.promote_learner(id);
+            if id == self.id {
+                self.is_learner = false;
+            }
+		} else {
+			let last_index = self.raft_log.last_index();
+			self.set_progress(id, 0, last_index+1, is_learner);
+		}
+		self.get_progress(id).unwrap().recent_active = true;
 	}
 
-	fn get_progress(&self, id: u64) -> Option<&Progress> {
-		self.prs.get(&id).or(self.learner_prs.get(&id))
+	pub fn promote_learner(&mut self, id: u64) {
+        if let Some(mut pr) = self.learner_prs.remove(&id) {
+            pr.is_learner = false;
+            self.prs.insert(id, pr);
+            return;
+        }
+        panic!("promote not exists learner: {}", id);
+    }
+
+	fn get_progress(&mut self, id: u64) -> Option<&mut Progress> {
+		self.prs.get_mut(&id).or(self.learner_prs.get_mut(&id))
 	}
 
 	fn set_progress(&mut self, id: u64, matched: u64, next: u64, is_learner: bool) {
@@ -392,5 +423,20 @@ impl<T: Storage> Raft<T> {
 		let mut pr = Progress::new(next, self.max_inflight as usize, is_learner);
 		pr.matched = matched;
 		self.learner_prs.insert(id, pr);
+	}
+
+	pub fn soft_state(&self) -> SoftState {
+		SoftState{
+			lead: self.lead,
+			raft_state: self.state,
+		}
+	}
+
+	pub fn hard_state(&self) -> HardState {
+		let mut hs = HardState::new();
+        hs.set_term(self.term);
+        hs.set_vote(self.vote);
+        hs.set_commit(self.raft_log.committed);
+        hs
 	}
 }

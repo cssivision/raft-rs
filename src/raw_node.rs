@@ -9,7 +9,7 @@ use protobuf;
 // The state is volatile and does not need to be persisted to the WAL.
 #[derive(Default, PartialEq, Debug)]
 pub struct SoftState {
-    pub leader_id: u64,
+    pub lead: u64,
     pub raft_state: StateType,
 }
 
@@ -57,6 +57,12 @@ impl<T: Storage> RawNode<T> {
             for peer in peers {
                 rn.raft.add_node(peer.id);
             }
+        }
+        rn.pre_soft_state = rn.raft.soft_state();
+        if last_index == 0 {
+            rn.pre_hard_state = HardState::new();
+        } else {
+            rn.pre_hard_state = rn.raft.hard_state();
         }
         Ok(rn)
     }
