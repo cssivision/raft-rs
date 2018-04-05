@@ -80,6 +80,7 @@
 
 
 use std::cmp;
+use std::marker::Copy;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
@@ -161,7 +162,7 @@ impl Progress {
         self.paused = true;
     }
 
-    // maybeUpdate returns false if the given n index comes from an outdated message.
+    // maybe_update returns false if the given n index comes from an outdated message.
     // Otherwise it updates the progress and returns true.
     pub fn maybe_update(&mut self, n: u64) -> bool {
         let mut updated = false;

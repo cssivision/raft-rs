@@ -1,7 +1,10 @@
+use std::cmp;
+
 use storage::Storage;
 use log_unstable::Unstable;
 use raftpb::{Entry};
 use errors::{Error, Result, StorageError};
+use util::limit_size;
 
 #[derive(Default)]
 pub struct RaftLog<T: Storage> {
@@ -86,7 +89,10 @@ impl<T: Storage> RaftLog<T> {
     }
 
     pub fn last_term(&self) -> u64 {
-        unimplemented!()
+        match self.term(self.last_index()) {
+            Ok(t) => t,
+            Err(e) => panic!("unexpected error when getting the last term ({})", e)
+        }
     }
 
     fn term(&self, i: u64) -> Result<u64> {
@@ -130,19 +136,106 @@ impl<T: Storage> RaftLog<T> {
         self.last_index()
     } 
 
-    pub fn must_check_out_of_bounds(&self, low: u64, hight: u64) {
+    pub fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool { 
+        if max_index > self.committed && self.zero_term_on_err_compacted(self.term(max_index)) == term {
+            self.commit_to(max_index);
+            return true;
+        }
+        false
+    }
+
+    fn commit_to(&mut self, tocommit: u64) {
+        if self.committed < tocommit {
+            if self.last_index() < tocommit {
+                panic!(
+                    "tocommit({}) is out of range [last_index({})]. Was the raft log corrupted, truncated, or lost?", 
+                    tocommit, 
+                    self.last_index(),
+                )
+            }
+            self.committed = tocommit
+        }
+    }
+
+    fn zero_term_on_err_compacted(&self, t: Result<u64>) -> u64 {
+        match t {
+            Ok(t) => t,
+            Err(e) => {
+                match e {
+                    Error::Storage(StorageError::Compacted) => {
+                        0
+                    },
+                    e => panic!("unexpected error ({})", e)
+                }
+            }
+        }
+    }
+
+    pub fn must_check_out_of_bounds(&self, low: u64, hight: u64) -> Result<()> {
         if low > hight {
             panic!("invlid unstable slice {} > {}", low, hight);
         }
 
         let fi = self.first_index();
         if low < fi {
-            panic!(Error::Storage(StorageError::Compacted))
+            return Err(Error::Storage(StorageError::Compacted));
         }
 
         let hi = self.last_index() + 1;
         if low < fi || hight > hi {
             panic!("slice[{},{}) out of bound [{},{}]", low, hight, fi, hi);
+        }
+        
+        Ok(())
+    }
+
+    pub fn slice(&self, lo: u64, hi: u64, max_size: u64) -> Result<Vec<Entry>> {
+        if let Err(e) = self.must_check_out_of_bounds(lo, hi) {
+            return Err(e);
+        }
+
+        if lo == hi {
+            return Ok(vec![]);
+        }
+
+        let mut ents = Vec::new();
+        if lo < self.unstable.offset {
+            let sorted_ents = match self.storage.entries(lo, cmp::min(hi, self.unstable.offset), max_size) {
+                Ok(ents) => ents,
+                Err(e) => {
+                    match e {
+                        Error::Storage(StorageError::Compacted) => {
+                            return Err(e);
+                        },
+                        Error::Storage(StorageError::Unavailable) => {
+                            panic!("entries[{}:{}) is unavailable from storage", lo, hi);
+                        },
+                        _ => panic!(e)
+                    }
+                }
+            };
+
+            // check if has reached the size limitation
+            if (sorted_ents.len() as u64) < cmp::min(hi, self.unstable.offset) - lo {
+                return Ok(sorted_ents);
+            }
+            ents.extend_from_slice(&sorted_ents);
+        }
+        
+        if hi > self.unstable.offset {
+            let unstable = self.unstable.slice(cmp::max(self.unstable.offset, lo), hi);
+            ents.extend_from_slice(unstable);
+        }
+
+        limit_size(&mut ents, max_size);
+        Ok(ents)
+    }
+
+    pub fn entries(&self, i: u64, max_size: u64) -> Result<Vec<Entry>> {
+        if i > self.last_index() {
+            Ok(vec![])
+        } else {
+            self.slice(i, self.last_index()+1, max_size)
         }
     }
 }

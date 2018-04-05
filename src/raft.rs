@@ -4,9 +4,10 @@ use storage::Storage;
 use raft_log::RaftLog;
 use progress::Progress;
 use errors::{Result, Error};
-use raftpb::{Message, HardState, MessageType};
+use raftpb::{Message, HardState, MessageType, Entry};
 use read_only::{ReadOnlyOption, ReadOnly};
 use raw_node::SoftState;
+use util::{NO_LIMIT, num_of_pending_conf, vote_msg_resp_type};
 
 use rand::{self, Rng};
 
@@ -311,11 +312,88 @@ impl<T: Storage> Raft<T> {
 		self.vote = state.vote;
 	}
 
+	fn append_entry(&mut self, ents: &mut [Entry]) {
+		let mut li = self.raft_log.last_index();
+		for i in 0..ents.len() {
+			ents[i].set_term(self.term);
+			ents[i].set_index(li+1+i as u64);
+		}
+
+		li = self.raft_log.append(ents);
+		let id = self.id;
+
+		// use latest "last" index after truncate/append
+		self.get_progress(id).unwrap().maybe_update(li);
+		// Regardless of maybe_commit's return, our caller will call bcastAppend.
+		self.maybe_commit();
+	}
+
+	// maybe_commit attempts to advance the commit index. Returns true if
+	// the commit index changed (in which case the caller should call
+	// self.bcastAppend).
+	fn maybe_commit(&mut self) {
+		let mut matched_indexs = Vec::with_capacity(self.prs.len());
+		for (_, p) in &self.prs {
+			matched_indexs.push(p.matched);
+		}
+		matched_indexs.sort_by(|a, b| b.cmp(a));
+		let max_matched_index = matched_indexs[self.quorum()-1];
+		self.raft_log.maybe_commit(max_matched_index, self.term);
+	}
+
 	pub fn become_follower(&mut self, term: u64, lead: u64) {
 		self.reset(term);
 		self.state = StateType::Follower;
 		self.lead = lead;
 		info!("{} became follower at term {}", self.tag, self.term);
+	}
+
+	fn become_leader(&mut self) {
+		if self.state == StateType::Follower {
+			panic!("invalid transition [follower -> leader]");
+		}
+
+		let term = self.term;
+		self.reset(term);
+		self.lead = self.id;
+		self.state = StateType::Leader;
+
+		let ents = match self.raft_log.entries(self.raft_log.committed+1, NO_LIMIT) {
+			Ok(ents) => ents,
+			Err(e) => panic!("unexpected error getting uncommitted entries ({:?})", e)
+		};
+
+		// Conservatively set the pendingConfIndex to the last index in the
+		// log. There may or may not be a pending config change, but it's
+		// safe to delay any future proposals until we commit all our
+		// pending log entries, and scanning the entire tail of the log
+		// could be expensive.
+		if ents.len() > 0 {
+			self.pending_conf_index = ents[ents.len()-1].get_index();
+		}
+
+		self.append_entry(&mut [Entry::new()]);
+		info!("{} {} became leader at term {}", self.tag, self.id, self.term);
+	}
+
+	pub fn become_candidate(&mut self) {
+		if self.state == StateType::Leader {
+			panic!("invalid transition [leader -> candidate]");
+		}
+		let term = self.term;
+		self.reset(term+1);
+		self.vote = self.id;
+		self.state = StateType::Candidate;
+		info!("{} {} became candidate at term {}", self.tag, self.id, self.term);
+	}
+
+	pub fn become_pre_candidate(&mut self) {
+		if self.state == StateType::Leader {
+			panic!("invalid transition [leader -> pre-candidate]")
+		}
+		self.votes = HashMap::new();
+		self.state = StateType::PreCandidate;
+		info!("{} {} became pre-candidate at term {}", self.tag, self.id, self.term);
 	}
 
 	pub fn reset(&mut self, term: u64) {
@@ -589,10 +667,111 @@ impl<T: Storage> Raft<T> {
 
 		if msg.get_msg_type() == MessageType::MsgHup {
 			if self.state != StateType::Leader {
+				let ents = match self.raft_log.slice(self.raft_log.applied+1, self.raft_log.committed+1, NO_LIMIT) {
+					Ok(ents) => ents,
+					Err(e) => panic!(e)
+				};
+
+				let n = num_of_pending_conf(&ents);
+				if n > 0 && self.raft_log.committed > self.raft_log.committed {
+					warn!(
+						"{} {} cannot campaign at term {} since there are still {} pending configuration changes to apply", 
+						self.tag,
+						self.id, 
+						self.term, 
+						n,
+					);
+					return Ok(());
+				}
+
+				info!("{} {} is starting a new election at term {}", self.tag, self.id, self.term);
+
+				if self.pre_vote {
+					self.campaign(CAMPAIGN_PRE_ELECTION);
+				} else {
+					self.campaign(CAMPAIGN_ELECTION);
+				}
+			} else {
+				debug!("{} {} ignoring MsgHup because already leader", self.tag, self.term);
 			}
+		} else if msg.get_msg_type() == MessageType::MsgPreVote || msg.get_msg_type() == MessageType::MsgVote {
+
+		} else {
+			
 		}
 		
 		Ok(())
+	}
+
+	pub fn campaign(&mut self, capaign_type: &[u8]) {
+		let (term, vote_msg) = if capaign_type == CAMPAIGN_PRE_ELECTION {
+			self.become_pre_candidate();
+			(self.term + 1, MessageType::MsgPreVote)
+		} else {
+			self.become_candidate();
+			(self.term, MessageType::MsgVote)
+		};
+
+		let id = self.id;
+		if self.quorum() == self.poll(id, vote_msg_resp_type(vote_msg), true) {
+			if capaign_type == CAMPAIGN_PRE_ELECTION {
+				self.campaign(CAMPAIGN_ELECTION);
+			} else {
+				self.become_leader();
+			}
+			return
+		}
+
+		let self_id = self.id;
+		self.get_prs_ids()
+			.iter()
+			.filter(|&id| *id != self_id)
+            .for_each(|&id| {
+				info!(
+					"{} {} [logterm: {}, index: {}] sent {:?} request to {} at term {}",
+					self.tag,
+					self.id, 
+					self.raft_log.last_term(), 
+					self.raft_log.last_index(), 
+					vote_msg, 
+					id, 
+					self.term,
+				);
+
+				let mut msg = Message::new();
+				msg.set_term(term);
+				msg.set_to(id);
+				msg.set_msg_type(vote_msg);
+				msg.set_index(self.raft_log.last_index());
+				msg.set_log_term(self.raft_log.last_term());
+
+				if capaign_type == CAMPAIGN_TRANSFER {
+					msg.set_context(capaign_type.to_vec());
+				}
+				self.send(msg);
+			});
+	}
+
+	fn get_prs_ids(&self) -> Vec<u64> {
+		self.prs.keys().map(|id| *id).collect()
+	}
+
+	fn poll(&mut self, id: u64, t: MessageType, v: bool) -> usize {
+		if v {
+			info!("{} {} received {:?} from {} at term {}", self.tag, self.id, t, id, self.term);
+		} else {
+			info!("{} {} received {:?} rejection from {} at term {}", self.tag, self.id, t, id, self.term);
+		}
+
+		if !self.votes.contains_key(&id) {
+			self.votes.insert(id, v);
+		}
+
+		self.votes.iter().filter(|&(_, vv)| *vv).count()
+	}
+
+	fn quorum(&self) -> usize {
+		self.prs.len()/2 + 1
 	}
 
 	// send persists state to stable storage and then sends to its mailbox.
@@ -633,4 +812,8 @@ impl<T: Storage> Raft<T> {
 		}
 		self.msgs.push(msg);
 	} 
+
+	pub fn step_follower(&self) {
+		
+	}
 }

@@ -1,5 +1,8 @@
-use protobuf::Message;
 use std::u64;
+
+use raftpb::{Entry, EntryType, MessageType};
+
+use protobuf::Message;
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
@@ -23,4 +26,18 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
         .count();
 
     entries.truncate(limit);
+}
+
+pub fn num_of_pending_conf(ents: &[Entry]) -> u64 {
+    ents.into_iter()
+            .filter(|e| e.get_entry_type() == EntryType::EntryConfChange)
+            .count() as u64 
+}
+
+pub fn vote_msg_resp_type(t: MessageType) -> MessageType {
+    match t {
+        MessageType::MsgVote => MessageType::MsgVoteResp,
+        MessageType::MsgPreVote => MessageType::MsgPreVoteResp,
+        _ => panic!("not a vote message: {:?}", t)
+    }
 }
