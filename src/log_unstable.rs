@@ -24,6 +24,25 @@ impl Unstable {
         }
     }
 
+    /// maybe_term returns the term of the entry at index i, if there
+    /// is any.
+    pub fn maybe_term(&self, i: u64) -> Option<u64> {
+        if i < self.offset {
+            if let Some(sn) = self.snapshot.as_ref() {
+                return Some(sn.get_metadata().get_term());
+            }
+            return None;
+        }
+
+        if let Some(last_index) = self.maybe_last_index() {
+            if i > last_index {
+                return None;
+            }
+            return Some(self.entries[(i-self.offset) as usize].get_term());
+        }
+        None
+    }
+
     /// maybe_first_index returns the index of the first possible entry in entries
     /// if it has a snapshot.
     pub fn maybe_first_index(&self) -> Option<u64> {
@@ -57,21 +76,21 @@ impl Unstable {
         } else {
             info!("truncate the unstable entries before index {}", after);
             let off = self.offset;
-            self.must_check_outofbounds(off, after);
+            self.must_check_out_of_bounds(off, after);
             self.entries.truncate((after-off) as usize);
             self.entries.extend_from_slice(ents);
         }
     }
 
     pub fn slice(&self, lo: u64, hi: u64) -> &[Entry] {
-        self.must_check_outofbounds(lo, hi);
+        self.must_check_out_of_bounds(lo, hi);
         let l = lo as usize;
         let h = hi as usize;
         let off = self.offset as usize;
         &self.entries[l - off..h - off]
     }
 
-    pub fn must_check_outofbounds(&self, low: u64, hight: u64) {
+    pub fn must_check_out_of_bounds(&self, low: u64, hight: u64) {
         if low > hight {
             panic!("invlid unstable slice {} > {}", low, hight);
         }

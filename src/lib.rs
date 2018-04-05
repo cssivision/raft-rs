@@ -7,9 +7,7 @@ extern crate log;
 
 extern crate protobuf;
 #[macro_use]
-extern crate failure;
-#[macro_use] 
-extern crate failure_derive;
+extern crate quick_error;
 extern crate rand;
 
 mod raftpb;

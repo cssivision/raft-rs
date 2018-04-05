@@ -1,6 +1,7 @@
 use storage::Storage;
 use log_unstable::Unstable;
 use raftpb::{Entry};
+use errors::{Error, Result, StorageError};
 
 #[derive(Default)]
 pub struct RaftLog<T: Storage> {
@@ -60,6 +61,13 @@ impl<T: Storage> RaftLog<T> {
         }
     }
 
+    pub fn first_index(&self) -> u64 {
+        if let Some(fi) = self.unstable.maybe_first_index() {
+            return fi;
+        }
+        self.storage.first_index().unwrap()
+    }
+
     pub fn applied_to(&mut self, i: u64) {
         if i == 0 {
             return 
@@ -81,6 +89,27 @@ impl<T: Storage> RaftLog<T> {
         unimplemented!()
     }
 
+    fn term(&self, i: u64) -> Result<u64> {
+        let dummy_index = self.first_index() - 1;
+        if i < dummy_index || i > self.last_index() {
+            return Ok(0);
+        }
+        if let Some(t) = self.unstable.maybe_term(i) {
+            return Ok(t);
+        }
+
+        match self.storage.term(i) {
+            Ok(t) => return Ok(t),
+            Err(e) => {
+                match e {
+                    Error::Storage(StorageError::Compacted) | Error::Storage(StorageError::Unavailable) => {},
+                    _ => panic!("unexpected error: {:?}", e)
+                }
+                Err(e)
+            }
+        }
+    }
+
     pub fn get_applied(&self) -> u64 {
         self.applied
     }
@@ -100,4 +129,20 @@ impl<T: Storage> RaftLog<T> {
         self.unstable.truncate_and_append(ents);
         self.last_index()
     } 
+
+    pub fn must_check_out_of_bounds(&self, low: u64, hight: u64) {
+        if low > hight {
+            panic!("invlid unstable slice {} > {}", low, hight);
+        }
+
+        let fi = self.first_index();
+        if low < fi {
+            panic!(Error::Storage(StorageError::Compacted))
+        }
+
+        let hi = self.last_index() + 1;
+        if low < fi || hight > hi {
+            panic!("slice[{},{}) out of bound [{},{}]", low, hight, fi, hi);
+        }
+    }
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use storage::Storage;
 use raft_log::RaftLog;
 use progress::Progress;
-use errors::Result;
+use errors::{Result, Error};
 use raftpb::{Message, HardState, MessageType};
 use read_only::{ReadOnlyOption, ReadOnly};
 use raw_node::SoftState;
@@ -111,19 +111,19 @@ pub struct Config {
 impl Config {
     fn validate(&mut self) -> Result<()> {
         if self.id == NONE {
-            return Err(format_err!("invalid node id"));
+            return Err(Error::ConfigInvalid("invalid node id".to_string()));
         }
 
         if self.heartbeat_tick == 0 {
-            return Err(format_err!("heartbeat tick must greater than 0"))
+            return Err(Error::ConfigInvalid("heartbeat tick must greater than 0".to_string()))
         }
 
         if self.max_size_per_msg <= 0 {
-            return Err(format_err!("max inflight messages must be greater than 0"))
+            return Err(Error::ConfigInvalid("max inflight messages must be greater than 0".to_string()))
         }
 
         if self.read_only_option == ReadOnlyOption::LeaseBased && !self.check_quorum {
-		    return Err(format_err!("check_quorum must be enabled when ReadOnlyOption is ReadOnlyOption::LeaseBased"))
+		    return Err(Error::ConfigInvalid("check_quorum must be enabled when ReadOnlyOption is ReadOnlyOption::LeaseBased".to_string()))
 	    }
 		if self.tag.is_empty() {
 			self.tag = "raft_log: ".to_string();
@@ -585,6 +585,11 @@ impl<T: Storage> Raft<T> {
 				)
 			}
 			return Ok(());
+		}
+
+		if msg.get_msg_type() == MessageType::MsgHup {
+			if self.state != StateType::Leader {
+			}
 		}
 		
 		Ok(())

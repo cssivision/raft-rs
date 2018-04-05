@@ -2,7 +2,7 @@ use std::u64;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use raftpb::{ConfState, Entry, HardState, Snapshot};
-use errors::{Result, StorageError};
+use errors::{Result, Error, StorageError};
 use util::limit_size;
 
 use protobuf::Message;
@@ -72,7 +72,7 @@ impl MemStorageCore {
         let index = self.snapshot.get_metadata().get_index();
         let snapshot_index = snapshot.get_metadata().get_index();
         if index >= snapshot_index {
-            return Err(StorageError::SnapshotOutOfDate.into());
+            return Err(Error::Storage(StorageError::SnapshotOutOfDate));
         }
 
         let mut e = Entry::new();
@@ -89,7 +89,7 @@ impl MemStorageCore {
     pub fn compact(&mut self, compact_index: u64) -> Result<()> {
         let offset = self.entries[0].get_index();
         if compact_index <= offset {
-            return Err(StorageError::ErrCompacted.into());
+            return Err(Error::Storage(StorageError::Compacted));
         }
 
         if compact_index > self.inner_last_index() {
@@ -150,7 +150,7 @@ impl MemStorageCore {
         data: Vec<u8>,
     ) -> Result<&Snapshot> {
         if index <= self.snapshot.get_metadata().get_index() {
-            return Err(StorageError::SnapshotOutOfDate.into());
+            return Err(Error::Storage(StorageError::SnapshotOutOfDate));
         }
 
         let offset = self.entries[0].get_index();
@@ -220,7 +220,7 @@ impl Storage for MemStorage {
         let core = self.read_lock();
         let offset = core.entries[0].get_index();
         if low <= offset {
-            return Err(StorageError::ErrCompacted.into());
+            return Err(Error::Storage(StorageError::Compacted));
         }
 
         if high > core.inner_last_index() + 1 {
@@ -228,7 +228,7 @@ impl Storage for MemStorage {
         }
 
         if core.entries.len() == 1 {
-            return Err(StorageError::ErrUnavailable.into());
+            return Err(Error::Storage(StorageError::Unavailable));
         }
 
         let lo = (low - offset) as usize;
@@ -254,10 +254,10 @@ impl Storage for MemStorage {
         let offset = core.entries[0].get_index();
 
         if index <= offset {
-            return Err(StorageError::ErrCompacted.into());
+            return Err(Error::Storage(StorageError::Compacted));
         }
         if index-offset >= core.entries.len() as u64 {
-            return Err(StorageError::ErrUnavailable.into());
+            return Err(Error::Storage(StorageError::Unavailable));
         }
 
         Ok(core.entries[(index-offset) as usize].get_index())
