@@ -695,16 +695,112 @@ impl<T: Storage> Raft<T> {
 				debug!("{} {} ignoring MsgHup because already leader", self.tag, self.term);
 			}
 		} else if msg.get_msg_type() == MessageType::MsgPreVote || msg.get_msg_type() == MessageType::MsgVote {
+			if self.is_learner {
+				info!(
+					"{} {} [logterm: {}, index: {}, vote: {}] ignored {:?} from {} [logterm: {}, index: {}] at term {}: learner can not vote",
+					self.tag,
+					self.id, 
+					self.raft_log.last_term(), 
+					self.raft_log.last_index(), 
+					self.vote, 
+					msg.get_msg_type(), 
+					msg.get_from(), 
+					msg.get_log_term(), 
+					msg.get_index(), 
+					self.term,
+				);
+				return Ok(());
+			}
 
+			// We can vote if this is a repeat of a vote we've already cast...
+			// ...we haven't voted and we don't think there's a leader yet in this term...
+			// ...or this is a PreVote for a future term...
+			let can_vote = self.vote == msg.get_from() 
+				|| (self.vote == NONE && self.lead == NONE)
+				|| (msg.get_msg_type() == MessageType::MsgPreVote && msg.get_term() > self.term);
+
+			// ...and we believe the candidate is up to date.
+			if can_vote && self.raft_log.is_up_to_date(msg.get_index(), msg.get_term()) {
+				info!(
+					"{} {} [logterm: {}, index: {}, vote: {}] cast {:?} for {} [logterm: {}, index: {}] at term {}",
+					self.tag,
+					self.id, 
+					self.raft_log.last_term(),
+					self.raft_log.last_index(), 
+					self.vote, 
+					msg.get_msg_type(), 
+					msg.get_from(), 
+					msg.get_log_term(), 
+					msg.get_index(), 
+					msg.get_term(),
+				);
+
+				// When responding to Msg{Pre,}Vote messages we include the term
+				// from the message, not the local term. To see why consider the
+				// case where a single node was previously partitioned away and
+				// it's local term is now of date. If we include the local term
+				// (recall that for pre-votes we don't update the local term), the
+				// (pre-)campaigning node on the other end will proceed to ignore
+				// the message (it ignores all out of date messages).
+				// The term in the original message and current local term are the
+				// same in the case of regular votes, but different for pre-votes.
+				let mut m = Message::new();
+				m.set_to(msg.get_from());
+				m.set_term(msg.get_term());
+				m.set_msg_type(vote_msg_resp_type(msg.get_msg_type()));
+				self.send(m);
+
+				if msg.get_msg_type() == MessageType::MsgVote {
+					self.election_elapsed = 0;
+					self.vote = msg.get_from();
+				}
+			} else {
+				info!(
+					"{} {} [logterm: {}, index: {}, vote: {}] rejected {:?} from {} [logterm: {}, index: {}] at term {}",
+					self.tag,
+					self.id, 
+					self.raft_log.last_term(),
+					self.raft_log.last_index(), 
+					self.vote, 
+					msg.get_msg_type(), 
+					msg.get_from(), 
+					msg.get_log_term(), 
+					msg.get_index(), 
+					msg.get_term(),
+				);
+
+				let mut m = Message::new();
+				m.set_to(msg.get_from());
+				m.set_term(self.term);
+				m.set_msg_type(vote_msg_resp_type(msg.get_msg_type()));
+				m.set_reject(true);
+				self.send(m);
+			}
 		} else {
-			
+			match self.state {
+				StateType::PreCandidate | StateType::Candidate => self.step_candidate(msg)?,
+				StateType::Follower => self.step_follower(msg)?,
+				StateType::Leader => self.step_leader(msg)?
+			}
 		}
 		
 		Ok(())
 	}
 
-	pub fn campaign(&mut self, capaign_type: &[u8]) {
-		let (term, vote_msg) = if capaign_type == CAMPAIGN_PRE_ELECTION {
+	fn step_follower(&self, msg: Message) -> Result<()> {
+		unimplemented!()
+	}
+
+	fn step_candidate(&self, msg: Message) -> Result<()> {
+		unimplemented!()
+	}
+
+	fn step_leader(&self, msg: Message) -> Result<()> {
+		unimplemented!()
+	}
+
+	pub fn campaign(&mut self, campaign_type: &[u8]) {
+		let (term, vote_msg) = if campaign_type == CAMPAIGN_PRE_ELECTION {
 			self.become_pre_candidate();
 			(self.term + 1, MessageType::MsgPreVote)
 		} else {
@@ -714,7 +810,7 @@ impl<T: Storage> Raft<T> {
 
 		let id = self.id;
 		if self.quorum() == self.poll(id, vote_msg_resp_type(vote_msg), true) {
-			if capaign_type == CAMPAIGN_PRE_ELECTION {
+			if campaign_type == CAMPAIGN_PRE_ELECTION {
 				self.campaign(CAMPAIGN_ELECTION);
 			} else {
 				self.become_leader();
@@ -745,8 +841,8 @@ impl<T: Storage> Raft<T> {
 				msg.set_index(self.raft_log.last_index());
 				msg.set_log_term(self.raft_log.last_term());
 
-				if capaign_type == CAMPAIGN_TRANSFER {
-					msg.set_context(capaign_type.to_vec());
+				if campaign_type == CAMPAIGN_TRANSFER {
+					msg.set_context(campaign_type.to_vec());
 				}
 				self.send(msg);
 			});
@@ -812,8 +908,4 @@ impl<T: Storage> Raft<T> {
 		}
 		self.msgs.push(msg);
 	} 
-
-	pub fn step_follower(&self) {
-		
-	}
 }

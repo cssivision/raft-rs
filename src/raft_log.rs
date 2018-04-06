@@ -238,4 +238,14 @@ impl<T: Storage> RaftLog<T> {
             self.slice(i, self.last_index()+1, max_size)
         }
     }
+
+    // is_up_to_date determines if the given (last_index,term) log is more up-to-date
+    // by comparing the index and term of the last entries in the existing logs.
+    // If the logs have last entries with different terms, then the log with the
+    // later term is more up-to-date. If the logs end with the same term, then
+    // whichever log has the larger last_index is more up-to-date. If the logs are
+    // the same, the given log is up-to-date.
+    pub fn is_up_to_date(&self, index: u64, term: u64) -> bool {
+        term > self.last_term() || (term == self.last_term() && index >= self.last_index())
+    }
 }
