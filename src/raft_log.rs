@@ -2,7 +2,7 @@ use std::cmp;
 
 use storage::Storage;
 use log_unstable::Unstable;
-use raftpb::{Entry};
+use raftpb::{Entry, Snapshot};
 use errors::{Error, Result, StorageError};
 use util::limit_size;
 
@@ -95,7 +95,7 @@ impl<T: Storage> RaftLog<T> {
         }
     }
 
-    fn term(&self, i: u64) -> Result<u64> {
+    pub fn term(&self, i: u64) -> Result<u64> {
         let dummy_index = self.first_index() - 1;
         if i < dummy_index || i > self.last_index() {
             return Ok(0);
@@ -144,7 +144,7 @@ impl<T: Storage> RaftLog<T> {
         false
     }
 
-    fn commit_to(&mut self, tocommit: u64) {
+    pub fn commit_to(&mut self, tocommit: u64) {
         if self.committed < tocommit {
             if self.last_index() < tocommit {
                 panic!(
@@ -157,7 +157,7 @@ impl<T: Storage> RaftLog<T> {
         }
     }
 
-    fn zero_term_on_err_compacted(&self, t: Result<u64>) -> u64 {
+    pub fn zero_term_on_err_compacted(&self, t: Result<u64>) -> u64 {
         match t {
             Ok(t) => t,
             Err(e) => {
@@ -239,13 +239,81 @@ impl<T: Storage> RaftLog<T> {
         }
     }
 
-    // is_up_to_date determines if the given (last_index,term) log is more up-to-date
-    // by comparing the index and term of the last entries in the existing logs.
-    // If the logs have last entries with different terms, then the log with the
-    // later term is more up-to-date. If the logs end with the same term, then
-    // whichever log has the larger last_index is more up-to-date. If the logs are
-    // the same, the given log is up-to-date.
+    /// is_up_to_date determines if the given (last_index,term) log is more up-to-date
+    /// by comparing the index and term of the last entries in the existing logs.
+    /// If the logs have last entries with different terms, then the log with the
+    /// later term is more up-to-date. If the logs end with the same term, then
+    /// whichever log has the larger last_index is more up-to-date. If the logs are
+    /// the same, the given log is up-to-date.
     pub fn is_up_to_date(&self, index: u64, term: u64) -> bool {
         term > self.last_term() || (term == self.last_term() && index >= self.last_index())
+    }
+
+    pub fn match_term(&self, i: u64, term: u64) -> bool {
+        if let Ok(t) = self.term(i) {
+            t == term
+        } else {
+            false
+        }
+    }
+
+    /// find_conflict finds the index of the conflict.
+    /// It returns the first pair of conflicting entries between the existing
+    /// entries and the given entries, if there are any.
+    /// If there is no conflicting entries, and the existing entries contains
+    /// all the given entries, zero will be returned.
+    /// If there is no conflicting entries, but the given entries contains new
+    /// entries, the index of the first new entry will be returned.
+    /// An entry is considered to be conflicting if it has the same index but
+    /// a different term.
+    /// The first entry MUST have an index equal to the argument 'from'.
+    /// The index of the given entries MUST be continuously increasing.
+    fn find_conflict(&self, ents: &[Entry]) -> u64 {
+        for e in ents {
+            if !self.match_term(e.get_index(), e.get_term()) {
+                if e.get_index() <= self.last_index() {
+                    info!(
+                        "{} found conflict at index {} [existing term: {}, conflicting term: {}]",
+                        self.tag,
+                        e.get_index(), 
+                        self.zero_term_on_err_compacted(self.term(e.get_index())), 
+                        e.get_term(),
+                    );
+                    return e.get_index();
+                }
+            }
+        }
+        0
+    }
+
+    // maybe_append returns None if the entries cannot be appended. Otherwise,
+    // it returns Some(last index of new entries).
+    pub fn maybe_append(&mut self, index: u64, log_term: u64, committed: u64, ents: &[Entry]) -> Option<u64> {
+        if self.match_term(index, log_term) {
+            let last_new_index = index + ents.len() as u64;
+            let ci = self.find_conflict(ents);
+            if ci == 0 {
+                // no conflict, existing entries contain "ents". 
+            } else if ci <= self.committed {
+                panic!("entry {} conflict with committed entry [committed({})]", ci, self.committed);
+            } else {
+                self.append(&ents[(ci-index-1) as usize..]);
+            }
+            self.commit_to(cmp::min(committed, last_new_index));
+            return Some(last_new_index);
+        }
+        None 
+    }
+
+    pub fn restore(&mut self, s: Snapshot) {
+        info!(
+            "{} log [{}] starts to restore snapshot [index: {}, term: {}]", 
+            self.tag,
+            self.to_string(), 
+            s.get_metadata().get_index(), 
+            s.get_metadata().get_term()
+        );
+
+        self.unstable.restore(s);
     }
 }

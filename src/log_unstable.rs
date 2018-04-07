@@ -104,4 +104,10 @@ impl Unstable {
             );   
         }
     }
+
+    pub fn restore(&mut self, s: Snapshot) {
+        self.offset = s.get_metadata().get_index();
+        self.entries.clear(); 
+        self.snapshot = Some(s);
+    }
 }

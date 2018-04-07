@@ -4,7 +4,7 @@ use storage::Storage;
 use raft_log::RaftLog;
 use progress::Progress;
 use errors::{Result, Error};
-use raftpb::{Message, HardState, MessageType, Entry};
+use raftpb::{Message, HardState, MessageType, Entry, Snapshot};
 use read_only::{ReadOnlyOption, ReadOnly};
 use raw_node::SoftState;
 use util::{NO_LIMIT, num_of_pending_conf, vote_msg_resp_type};
@@ -677,8 +677,8 @@ impl<T: Storage> Raft<T> {
 					warn!(
 						"{} {} cannot campaign at term {} since there are still {} pending configuration changes to apply", 
 						self.tag,
-						self.id, 
-						self.term, 
+						self.id,
+						self.term,
 						n,
 					);
 					return Ok(());
@@ -791,12 +791,165 @@ impl<T: Storage> Raft<T> {
 		unimplemented!()
 	}
 
-	fn step_candidate(&self, msg: Message) -> Result<()> {
-		unimplemented!()
+	// step_candidate is shared by Candidate and PreCandidate; the difference is
+	// whether they respond to MsgVoteResp or MsgPreVoteResp.
+	fn step_candidate(&mut self, msg: Message) -> Result<()> {
+		match msg.get_msg_type() {
+			MessageType::MsgProp => {
+				info!("{} {} no leader at term {}; dropping proposal", self.tag, self.id, self.term);
+				return Err(Error::ProposalDropped);
+			}
+			MessageType::MsgApp => {
+				if msg.get_term() != self.term {
+					warn!("{} always should m.Term == r.Term, but not", self.tag);
+				}
+				self.become_follower(msg.get_term(), msg.get_from());
+				self.handle_append_entries(msg);
+			}
+			MessageType::MsgHeartbeat => {
+				if msg.get_term() != self.term {
+					warn!("{} always should m.Term == r.Term, but not", self.tag);
+				}
+				self.become_follower(msg.get_term(), msg.get_from());
+				self.handle_heartbeat(msg);
+			}
+			MessageType::MsgSnap => {
+				if msg.get_term() != self.term {
+					warn!("{} always should m.Term == r.Term, but not", self.tag);
+				}
+				self.become_follower(msg.get_term(), msg.get_from());
+				self.handle_snapshot(msg);
+			}
+			_ => return Ok(())
+		}
+
+		Ok(())
 	}
 
 	fn step_leader(&self, msg: Message) -> Result<()> {
 		unimplemented!()
+	}
+
+	fn handle_snapshot(&self, msg: Message) {
+		let (sindex, sterm) = (msg.get_snapshot().get_metadata().get_index(), msg.get_snapshot().get_metadata().get_term());
+
+	}
+
+	// restore recovers the state machine from a snapshot. It restores the log and the
+	// configuration of state machine.
+	fn restore(&mut self, s: Snapshot) -> bool {
+		if s.get_metadata().get_index() < self.raft_log.committed {
+			return false;
+		}
+
+		if self.raft_log.match_term(s.get_metadata().get_index(), s.get_metadata().get_term()) {
+			info!(
+				"{} {} [commit: {}, lastindex: {}, lastterm: {}] fast-forwarded commit to snapshot [index: {}, term: {}]",
+				self.tag,
+				self.id, 
+				self.raft_log.committed, 
+				self.raft_log.last_index(), 
+				self.raft_log.last_term(), 
+				s.get_metadata().get_index(), 
+				s.get_metadata().get_term()
+			);
+			self.raft_log.commit_to(s.get_metadata().get_index());
+			return false
+		}
+
+		// normal peer can not become learner.
+		if !self.is_learner {
+			if s.get_metadata().get_conf_state().get_learners().contains(&self.id) {
+				error!(
+					"{} {} can't become learner when restores snapshot [index: {}, term: {}]", 
+					self.tag,
+					self.id,
+					s.get_metadata().get_index(),
+					s.get_metadata().get_term(),
+				);
+
+				return false;
+			}
+		}
+
+		info!(
+			"{} {} [commit: {}, lastindex: {}, lastterm: {}] starts to restore snapshot [index: {}, term: {}]",
+			self.tag,
+			self.id, 
+			self.raft_log.committed,
+			self.raft_log.last_index(), 
+			self.raft_log.last_term(), 
+			s.get_metadata().get_index(), 
+			s.get_metadata().get_term()
+		);
+
+		self.prs.clear();
+		self.learner_prs.clear();
+		self.restore_node(s.get_metadata().get_conf_state().get_nodes(), false);
+		self.restore_node(s.get_metadata().get_conf_state().get_learners(), true);
+		self.raft_log.restore(s);
+
+		true 
+	}
+
+	fn restore_node(&mut self, nodes: &[u64], is_learner: bool) {
+		for &n in nodes {
+			let (mut matched, mut next) = (0, self.raft_log.last_index()+1);
+			if n == self.id {
+				matched = next - 1;
+				self.is_learner = is_learner;
+			}
+
+			self.set_progress(n, matched, next, is_learner);
+			// info!("{} {} restored progress of {} [{:?}]", self.tag, self.id, n, self.get_progress(n));
+		}
+	}
+
+	fn handle_heartbeat(&mut self, mut msg: Message) {
+		self.raft_log.commit_to(msg.get_commit());
+		let mut m = Message::new();
+		m.set_to(msg.get_from());
+		m.set_msg_type(MessageType::MsgAppResp);
+		m.set_context(msg.take_context());
+		self.send(m);
+	}
+
+	fn handle_append_entries(&mut self, msg: Message) {
+		if msg.get_index() < self.raft_log.committed {
+			let mut m = Message::new();
+			m.set_to(msg.get_from());
+			m.set_msg_type(MessageType::MsgAppResp);
+			m.set_index(self.raft_log.committed);
+			self.send(m);
+			return 
+		}
+
+		if let Some(mlast_index) = self.raft_log.maybe_append(msg.get_index(), msg.get_log_term(), msg.get_commit(), msg.get_entries()) {
+			let mut m = Message::new();
+			m.set_to(msg.get_from());
+			m.set_msg_type(MessageType::MsgAppResp);
+			m.set_index(mlast_index);
+			self.send(m);
+		} else {
+			debug!(
+				"{} {} [logterm: {}, index: {}] rejected msgApp [logterm: {}, index: {}] from {}",
+				self.tag,
+				self.id, 
+				self.raft_log.zero_term_on_err_compacted(self.raft_log.term(msg.get_index())), 
+				msg.get_index(),
+				msg.get_log_term(), 
+				msg.get_index(), 
+				msg.get_from(),
+			);
+
+			let mut m = Message::new();
+			m.set_to(msg.get_from());
+			m.set_msg_type(MessageType::MsgAppResp);
+			m.set_reject(true);
+			m.set_index(msg.get_index());
+			m.set_reject_hint(self.raft_log.last_index());
+			self.send(m);
+		}
 	}
 
 	pub fn campaign(&mut self, campaign_type: &[u8]) {

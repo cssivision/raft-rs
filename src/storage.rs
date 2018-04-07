@@ -260,7 +260,7 @@ impl Storage for MemStorage {
             return Err(Error::Storage(StorageError::Unavailable));
         }
 
-        Ok(core.entries[(index-offset) as usize].get_index())
+        Ok(core.entries[(index-offset) as usize].get_term())
     }
 
     fn snapshot(&self) -> Result<Snapshot> {
