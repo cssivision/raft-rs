@@ -1,6 +1,6 @@
 use errors::Result;
 use raft::{Raft, Config, NONE, StateType, Peer};
-use storage::{Storage, MemStorage};
+use storage::{Storage};
 use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType};
 
 use protobuf;

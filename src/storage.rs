@@ -5,8 +5,6 @@ use raftpb::{ConfState, Entry, HardState, Snapshot};
 use errors::{Result, Error, StorageError};
 use util::limit_size;
 
-use protobuf::Message;
-
 pub trait Storage {
     /// initial_state returns the saved HardState and ConfState information.
     fn initial_state(&self) -> Result<(HardState, ConfState)>;

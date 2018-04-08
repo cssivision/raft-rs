@@ -80,7 +80,6 @@
 
 
 use std::cmp;
-use std::marker::Copy;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {

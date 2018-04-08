@@ -820,19 +820,114 @@ impl<T: Storage> Raft<T> {
 				self.become_follower(msg.get_term(), msg.get_from());
 				self.handle_snapshot(msg);
 			}
+			MessageType::MsgPreVoteResp | MessageType::MsgVoteResp => {
+				if (self.state == StateType::PreCandidate && msg.get_msg_type() != MessageType::MsgPreVoteResp) 
+					|| (self.state == StateType::Candidate && msg.get_msg_type() != MessageType::MsgVoteResp) {
+					return Ok(());
+				}
+				let granted = self.poll(msg.get_from(), msg.get_msg_type(), !msg.get_reject());
+				info!("{} {} [quorum:{}] has received {} {:?} votes and {} vote rejections", 
+					self.tag,
+					self.id, 
+					self.quorum(), 
+					granted, 
+					msg.get_msg_type(), 
+					self.votes.len() - granted,
+				);
+				if self.quorum() == granted {
+					if self.state == StateType::PreCandidate {
+						self.campaign(CAMPAIGN_ELECTION);
+					} else {
+						self.become_leader();
+						self.bcast_append();
+					}
+				} else if self.votes.len() - granted == granted {
+					// pb.MsgPreVoteResp contains future term of pre-candidate
+					// m.Term > r.Term; reuse r.Term
+					let term = self.term;
+					self.become_follower(term, NONE);
+				}
+			}
+			MessageType::MsgTimeoutNow => {
+				info!(
+					"{} {} [term {} state {:?}] ignored MsgTimeoutNow from {}", 
+					self.tag,
+					self.id, 
+					self.term, 
+					self.state, 
+					msg.get_from(),
+				);
+			}
 			_ => return Ok(())
 		}
 
 		Ok(())
 	}
 
+	// bcast_append sends RPC, with entries to all peers that are not up-to-date
+	// according to the progress recorded in r.prs.
+	fn bcast_append(&self) {
+		for (&id, _) in &self.prs {
+			if id == self.id {
+				return 
+			}
+			
+			self.send_append(id);
+		}
+
+		for (&id, _) in &self.learner_prs {
+			if id == self.id {
+				return 
+			}
+			
+			self.send_append(id);
+		}
+	}
+
+	// send_append sends RPC, with entries to the given peer.
+	fn send_append(&self, id: u64) {
+
+	}
+
 	fn step_leader(&self, msg: Message) -> Result<()> {
 		unimplemented!()
 	}
 
-	fn handle_snapshot(&self, msg: Message) {
+	fn handle_snapshot(&mut self, mut msg: Message) {
 		let (sindex, sterm) = (msg.get_snapshot().get_metadata().get_index(), msg.get_snapshot().get_metadata().get_term());
 
+		if self.restore(msg.take_snapshot()) {
+			info!(
+				"{} {} [commit: {}] restore snapshot [index: {}, term: {}]",
+				self.tag,
+				self.id,
+				self.raft_log.committed,
+				sindex, 
+				sterm
+			);
+
+			let mut m = Message::new();
+			m.set_to(msg.get_from());
+			m.set_msg_type(MessageType::MsgSnap);
+			m.set_index(self.raft_log.last_index());
+			self.send(m);
+
+		} else {
+			info!(
+				"{} {} [commit: {}] ignored snapshot [index: {}, term: {}]",
+				self.tag,
+				self.id,
+				self.raft_log.committed,
+				sindex, 
+				sterm
+			);
+
+			let mut m = Message::new();
+			m.set_to(msg.get_from());
+			m.set_msg_type(MessageType::MsgSnap);
+			m.set_index(self.raft_log.committed);
+			self.send(m);
+		}
 	}
 
 	// restore recovers the state machine from a snapshot. It restores the log and the
@@ -901,7 +996,7 @@ impl<T: Storage> Raft<T> {
 			}
 
 			self.set_progress(n, matched, next, is_learner);
-			// info!("{} {} restored progress of {} [{:?}]", self.tag, self.id, n, self.get_progress(n));
+			info!("{} {} restored progress of {} [matched: {}, next: {}]", self.tag, self.id, n, matched, next);
 		}
 	}
 

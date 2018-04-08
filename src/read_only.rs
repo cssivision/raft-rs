@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use raftpb::{Entry, Message};
+use raftpb::{Message};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ReadOnlyOption {
