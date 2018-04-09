@@ -316,4 +316,12 @@ impl<T: Storage> RaftLog<T> {
 
         self.unstable.restore(s);
     }
+
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        if let Some(s) = self.unstable.snapshot.as_ref() {
+            return Ok(s.clone());
+        }
+
+        self.storage.snapshot()
+    }
 }

@@ -1,13 +1,15 @@
 use std::collections::HashMap;
+use std::mem;
 
 use storage::Storage;
 use raft_log::RaftLog;
-use progress::Progress;
-use errors::{Result, Error};
+use progress::{Progress, ProgressState};
+use errors::{Result, Error, StorageError};
 use raftpb::{Message, HardState, MessageType, Entry, Snapshot};
 use read_only::{ReadOnlyOption, ReadOnly};
 use raw_node::SoftState;
 use util::{NO_LIMIT, num_of_pending_conf, vote_msg_resp_type};
+use protobuf::RepeatedField;
 
 use rand::{self, Rng};
 
@@ -323,9 +325,10 @@ impl<T: Storage> Raft<T> {
 		let id = self.id;
 
 		// use latest "last" index after truncate/append
-		self.get_progress(id).unwrap().maybe_update(li);
-		// Regardless of maybe_commit's return, our caller will call bcastAppend.
+		self.get_mut_progress(id).unwrap().maybe_update(li);
+		// Regardless of maybe_commit's return, our caller will call bcast_append.
 		self.maybe_commit();
+		self.bcast_append();
 	}
 
 	// maybe_commit attempts to advance the commit index. Returns true if
@@ -479,7 +482,7 @@ impl<T: Storage> Raft<T> {
 			let last_index = self.raft_log.last_index();
 			self.set_progress(id, 0, last_index+1, is_learner);
 		}
-		self.get_progress(id).unwrap().recent_active = true;
+		self.get_mut_progress(id).unwrap().recent_active = true;
 	}
 
 	pub fn promote_learner(&mut self, id: u64) {
@@ -491,7 +494,7 @@ impl<T: Storage> Raft<T> {
         panic!("promote not exists learner: {}", id);
     }
 
-	fn get_progress(&mut self, id: u64) -> Option<&mut Progress> {
+	fn get_mut_progress(&mut self, id: u64) -> Option<&mut Progress> {
 		self.prs.get_mut(&id).or(self.learner_prs.get_mut(&id))
 	}
 
@@ -787,7 +790,77 @@ impl<T: Storage> Raft<T> {
 		Ok(())
 	}
 
-	fn step_follower(&self, msg: Message) -> Result<()> {
+	fn step_follower(&mut self, mut msg: Message) -> Result<()> {
+		match msg.get_msg_type() {
+			MessageType::MsgProp => {
+				if self.lead == NONE {
+					info!("{} {} no leader at term {}; dropping proposal", self.tag, self.id, self.term);
+					return Err(Error::ProposalDropped);
+				} else if self.disable_proposal_forwarding {
+					info!(
+						"{} {} not forwarding to leader {} at term {}; dropping proposal", 
+						self.tag,
+						self.id,
+						self.lead,
+						self.term,
+					);
+					return Err(Error::ProposalDropped);
+				}
+
+				msg.set_to(self.lead);
+				self.send(msg);
+			}
+			MessageType::MsgApp => {
+				self.election_elapsed = 0;
+				self.lead = msg.get_from();
+				self.handle_append_entries(msg);
+			}
+			MessageType::MsgHeartbeat => {
+				self.election_elapsed = 0;
+				self.lead = msg.get_from();
+				self.handle_heartbeat(msg);
+			}
+			MessageType::MsgSnap => {
+				self.election_elapsed = 0;
+				self.lead = msg.get_from();
+				self.handle_snapshot(msg);
+			}
+			MessageType::MsgTransferLeader => {
+				if self.lead == NONE {
+					info!("{} {} no leader at term {}; dropping leader transfer msg",
+						self.tag,
+						self.id,
+						self.term,
+					);
+					return Ok(());
+				}
+				msg.set_to(self.lead);
+				self.send(msg);
+			}
+			MessageType::MsgTimeoutNow => {
+
+			}
+			MessageType::MsgReadIndex => {
+				if self.lead == NONE {
+					info!("{} {} no leader at term {}; dropping leader transfer msg",
+						self.tag,
+						self.id,
+						self.term,
+					);
+					return Ok(());
+				}
+				msg.set_to(self.lead);
+				self.send(msg);
+			}
+			MessageType::MsgReadIndexResp => {
+				
+			}
+			_ => return Ok(())
+		}
+		Ok(())
+	}
+
+	fn step_leader(&self, msg: Message) -> Result<()> {
 		unimplemented!()
 	}
 
@@ -801,21 +874,21 @@ impl<T: Storage> Raft<T> {
 			}
 			MessageType::MsgApp => {
 				if msg.get_term() != self.term {
-					warn!("{} always should m.Term == r.Term, but not", self.tag);
+					warn!("{} always should msg.term == self.term, but not", self.tag);
 				}
 				self.become_follower(msg.get_term(), msg.get_from());
 				self.handle_append_entries(msg);
 			}
 			MessageType::MsgHeartbeat => {
 				if msg.get_term() != self.term {
-					warn!("{} always should m.Term == r.Term, but not", self.tag);
+					warn!("{} always should msg.term == self.term, but not", self.tag);
 				}
 				self.become_follower(msg.get_term(), msg.get_from());
 				self.handle_heartbeat(msg);
 			}
 			MessageType::MsgSnap => {
 				if msg.get_term() != self.term {
-					warn!("{} always should m.Term == r.Term, but not", self.tag);
+					warn!("{} always should msg.term == self.term, but not", self.tag);
 				}
 				self.become_follower(msg.get_term(), msg.get_from());
 				self.handle_snapshot(msg);
@@ -842,8 +915,8 @@ impl<T: Storage> Raft<T> {
 						self.bcast_append();
 					}
 				} else if self.votes.len() - granted == granted {
-					// pb.MsgPreVoteResp contains future term of pre-candidate
-					// m.Term > r.Term; reuse r.Term
+					// MsgPreVoteResp contains future term of pre-candidate
+					// msg.term > self.term; reuse self.term
 					let term = self.term;
 					self.become_follower(term, NONE);
 				}
@@ -866,31 +939,124 @@ impl<T: Storage> Raft<T> {
 
 	// bcast_append sends RPC, with entries to all peers that are not up-to-date
 	// according to the progress recorded in r.prs.
-	fn bcast_append(&self) {
-		for (&id, _) in &self.prs {
-			if id == self.id {
-				return 
-			}
-			
-			self.send_append(id);
-		}
+	fn bcast_append(&mut self) {
+		let self_id = self.id;
+		let mut prs = self.take_prs();
+		prs.iter_mut().filter(|&(id, _)| *id != self_id).for_each(|(&id, mut pr)| {
+			self.send_append(id, &mut pr);
+		});
+		self.set_prs(prs);
 
-		for (&id, _) in &self.learner_prs {
-			if id == self.id {
-				return 
-			}
-			
-			self.send_append(id);
-		}
+		let mut learner_prs = self.take_learner_prs();
+		learner_prs.iter_mut().filter(|&(id, _)| *id != self_id).for_each(|(&id, mut pr)| {
+			self.send_append(id, &mut pr);
+		});
+		self.set_learner_prs(learner_prs);
+	}
+
+	fn set_prs(&mut self, prs: HashMap<u64, Progress>) {
+		mem::replace(&mut self.prs, prs);
+	}
+
+	fn take_prs(&mut self) -> HashMap<u64, Progress> {
+		mem::replace(&mut self.prs, HashMap::new())
+	}
+
+	fn take_learner_prs(&mut self) -> HashMap<u64, Progress> {
+		mem::replace(&mut self.learner_prs, HashMap::new())
+	}
+
+	fn set_learner_prs(&mut self, learner_prs: HashMap<u64, Progress>) {
+		mem::replace(&mut self.learner_prs, learner_prs);
 	}
 
 	// send_append sends RPC, with entries to the given peer.
-	fn send_append(&self, id: u64) {
+	fn send_append(&mut self, to: u64, pr: &mut Progress) {
+		if pr.is_paused() {
+			return 
+		}
 
-	}
+		let mut m = Message::new();
+		m.set_to(to);
+		let term = self.raft_log.term(pr.next - 1);
+		let ents = self.raft_log.entries(pr.next, self.max_msg_size);
 
-	fn step_leader(&self, msg: Message) -> Result<()> {
-		unimplemented!()
+		// send snapshot if we failed to get term or entries
+		if term.is_err() || ents.is_err() {
+			if !pr.recent_active {
+				debug!("{} ignore sending snapshot to {} since it is not recently active", self.tag, to);
+				return 
+			}
+
+			m.set_msg_type(MessageType::MsgSnap);
+			match self.raft_log.snapshot() {
+				Ok(s) => {
+					if s.get_metadata().get_index() == 0 {
+						panic!("need non-empty snapshot");
+					}
+					let (sindex, sterm) = (s.get_metadata().get_index(), s.get_metadata().get_term());
+
+					m.set_snapshot(s);
+					debug!(
+						"{} {} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {} [{:?}]",
+						self.tag,
+						self.id, 
+						self.raft_log.first_index(), 
+						self.raft_log.committed, 
+						sindex, 
+						sterm, 
+						to, 
+						pr
+					);
+
+					pr.become_snapshot(sindex);
+					debug!(
+						"{} {} paused sending replication messages to {} [{:?}]", 
+						self.tag,
+						self.id, 
+						to, 
+						pr,
+					);
+				}
+				Err(e) => {
+					if e == Error::Storage(StorageError::SnapshotTemporarilyUnavailable) {
+						debug!(
+							"{} {} failed to send snapshot to {} because snapshot is temporarily unavailable", 
+							self.tag,
+							self.id,
+							to,
+						);
+						return 
+					}
+					panic!(e)
+				}
+			}
+
+		} else {
+			let term = term.unwrap();
+			let ents = ents.unwrap();
+			m.set_msg_type(MessageType::MsgApp);
+			m.set_index(pr.next-1);
+			m.set_log_term(term);
+			m.set_entries(RepeatedField::from_vec(ents));
+			m.set_commit(self.raft_log.committed);
+
+			let n = m.get_entries().len();
+			if n != 0 {
+				// optimistically increase the next when in ProgressState::Replicate
+				if pr.state == ProgressState::Replicate {
+					let last = m.get_entries()[n-1].get_index();
+					pr.optimistic_update(last);
+					pr.ins.add(last);
+				} else if pr.state == ProgressState::Probe {
+					pr.pause();
+				} else {
+					panic!("{} is sending append in unhandled state {:?}", self.id, pr.state);	
+				}
+			}
+		}
+
+		self.send(m);
 	}
 
 	fn handle_snapshot(&mut self, mut msg: Message) {

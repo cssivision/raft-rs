@@ -147,7 +147,7 @@ impl Progress {
     }
 
     pub fn become_snapshot(&mut self, index: u64) {
-        // Original state must be ProgressState::Snapshot, after sending snapshot to follower
+        // Original state must be ProgressState::Probe, after sending snapshot to follower
         // pending_snapshot = index.
         self.reset_state(ProgressState::Snapshot);
         self.pending_snapshot = index;
@@ -157,7 +157,7 @@ impl Progress {
         self.paused = false;
     }
 
-    fn pause(&mut self) {
+    pub fn pause(&mut self) {
         self.paused = true;
     }
 
@@ -263,5 +263,20 @@ impl Inflights {
 
     fn cap(&self) -> usize {
         self.buffer.capacity()
+    }
+
+    // add adds an inflight into inflights
+    pub fn add(&mut self, inflight: u64) {
+        if self.full() {
+            panic!("cannot add into a full inflights");
+        }
+
+        let mut next = self.start + self.count;
+        if next >= self.cap() {
+            next = next - self.cap();
+        }
+
+        self.buffer[next] = inflight;
+        self.count += 1;
     }
 }
