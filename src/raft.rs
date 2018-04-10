@@ -6,7 +6,7 @@ use raft_log::RaftLog;
 use progress::{Progress, ProgressState};
 use errors::{Result, Error, StorageError};
 use raftpb::{Message, HardState, MessageType, Entry, Snapshot};
-use read_only::{ReadOnlyOption, ReadOnly};
+use read_only::{ReadOnlyOption, ReadOnly, ReadState};
 use raw_node::SoftState;
 use util::{NO_LIMIT, num_of_pending_conf, vote_msg_resp_type};
 use protobuf::RepeatedField;
@@ -161,6 +161,7 @@ pub struct Raft<T: Storage> {
     pub id: u64,
     pub term: u64,
 	pub vote: u64,
+	read_states: Vec<ReadState>,
     pub raft_log: RaftLog<T>,
 	pub max_inflight: u64,
 	pub max_msg_size: u64,
@@ -240,6 +241,7 @@ impl<T: Storage> Raft<T> {
 			id: c.id,
 			term: Default::default(),
 			vote: Default::default(),
+			read_states: Default::default(),
 			raft_log: raft_log,
 			max_msg_size: c.max_size_per_msg,
 			max_inflight: c.max_inflight_msgs,
@@ -838,7 +840,27 @@ impl<T: Storage> Raft<T> {
 				self.send(msg);
 			}
 			MessageType::MsgTimeoutNow => {
+				if self.promotable() {
+					info!(
+						"{} {} [term {}] received MsgTimeoutNow from {} and starts an election to get leadership.", 
+						self.tag,
+						self.id, 
+						self.term, 
+						msg.get_from(),
+					);
 
+					// Leadership transfers never use pre-vote even if r.preVote is true; we
+					// know we are not recovering from a partition so there is no need for the
+					// extra round trip.
+					self.campaign(CAMPAIGN_TRANSFER);
+				} else {
+					info!(
+						"{} {} received MsgTimeoutNow from {} but is not promotable", 
+						self.tag,
+						self.id,
+						msg.get_from(),
+					);
+				}
 			}
 			MessageType::MsgReadIndex => {
 				if self.lead == NONE {
@@ -853,7 +875,21 @@ impl<T: Storage> Raft<T> {
 				self.send(msg);
 			}
 			MessageType::MsgReadIndexResp => {
-				
+				if msg.get_entries().len() != 1 {
+					error!(
+						"{} {} invalid format of MsgReadIndexResp from {}, entries count: {}", 
+						self.tag,
+						self.id, 
+						msg.get_from(), 
+						msg.get_entries().len(),
+					);
+					return Ok(());
+				}
+				let rs = ReadState{
+					index: msg.get_index(),
+					request_ctx: msg.take_entries()[0].take_data(),
+				};
+				self.read_states.push(rs);
 			}
 			_ => return Ok(())
 		}
@@ -861,7 +897,13 @@ impl<T: Storage> Raft<T> {
 	}
 
 	fn step_leader(&self, msg: Message) -> Result<()> {
-		unimplemented!()
+		match msg.get_msg_type() {
+			MessageType::MsgBeat => {
+
+			}
+			_ => return Ok(())
+		}
+		Ok(())
 	}
 
 	// step_candidate is shared by Candidate and PreCandidate; the difference is
@@ -952,6 +994,16 @@ impl<T: Storage> Raft<T> {
 			self.send_append(id, &mut pr);
 		});
 		self.set_learner_prs(learner_prs);
+	}
+
+	// bcast_heartbeat sends RPC, without entries to all the peers.
+	fn bcast_heartbeat(&mut self) {
+		let last_ctx = self.read_only.last_pending_request_ctx();
+		self.bcast_heartbeat_with_ctx(last_ctx);
+	}
+
+	fn bcast_heartbeat_with_ctx(&self, ctx: Option<Vec<u8>>) {
+
 	}
 
 	fn set_prs(&mut self, prs: HashMap<u64, Progress>) {
