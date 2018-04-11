@@ -19,8 +19,8 @@ impl Unstable {
         Unstable{
             snapshot: None,
             entries: vec![],
-            offset: offset,
-            tag: tag,
+            offset,
+            tag,
         }
     }
 

@@ -123,7 +123,7 @@ impl Config {
             return Err(Error::ConfigInvalid("heartbeat tick must greater than 0".to_string()))
         }
 
-        if self.max_size_per_msg <= 0 {
+        if self.max_size_per_msg == 0 {
             return Err(Error::ConfigInvalid("max inflight messages must be greater than 0".to_string()))
         }
 
@@ -244,7 +244,7 @@ impl<T: Storage> Raft<T> {
 			term: Default::default(),
 			vote: Default::default(),
 			read_states: Default::default(),
-			raft_log: raft_log,
+			raft_log,
 			max_msg_size: c.max_size_per_msg,
 			max_inflight: c.max_inflight_msgs,
 			prs: HashMap::new(),
@@ -256,7 +256,7 @@ impl<T: Storage> Raft<T> {
 			lead: NONE,
 			lead_transferee: Default::default(),
 			pending_conf_index: Default::default(),
-			read_only: ReadOnly::new(c.read_only_option.clone()),
+			read_only: ReadOnly::new(c.read_only_option),
 			election_elapsed: Default::default(),
 			heartbeat_elapsed: Default::default(),
 			check_quorum: c.check_quorum,
@@ -281,7 +281,7 @@ impl<T: Storage> Raft<T> {
 			}
 		}
 		if hard_state != HardState::new() {
-			r.load_state(hard_state);
+			r.load_state(&hard_state);
 		}
 
 		if c.applied > 0 {
@@ -303,7 +303,7 @@ impl<T: Storage> Raft<T> {
 		r 
     }
 
-	pub fn load_state(&mut self, state: HardState) {
+	pub fn load_state(&mut self, state: &HardState) {
 		if state.commit < self.raft_log.committed || state.commit > self.raft_log.last_index() {
 			panic!(
 				"{} state.commit {} is out of range [{}, {}]", 
@@ -320,9 +320,9 @@ impl<T: Storage> Raft<T> {
 
 	fn append_entry(&mut self, ents: &mut [Entry]) {
 		let mut li = self.raft_log.last_index();
-		for i in 0..ents.len() {
-			ents[i].set_term(self.term);
-			ents[i].set_index(li+1+i as u64);
+		for (i, e) in ents.iter_mut().enumerate() {
+			e.set_term(self.term);
+			e.set_index(li+1+i as u64);
 		}
 
 		li = self.raft_log.append(ents);
@@ -340,7 +340,7 @@ impl<T: Storage> Raft<T> {
 	// self.bcastAppend).
 	fn maybe_commit(&mut self) {
 		let mut matched_indexs = Vec::with_capacity(self.prs.len());
-		for (_, p) in &self.prs {
+		for p in self.prs.values() {
 			matched_indexs.push(p.matched);
 		}
 		matched_indexs.sort_by(|a, b| b.cmp(a));
@@ -375,7 +375,7 @@ impl<T: Storage> Raft<T> {
 		// safe to delay any future proposals until we commit all our
 		// pending log entries, and scanning the entire tail of the log
 		// could be expensive.
-		if ents.len() > 0 {
+		if !ents.is_empty() {
 			self.pending_conf_index = ents[ents.len()-1].get_index();
 		}
 
@@ -418,13 +418,13 @@ impl<T: Storage> Raft<T> {
 		let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
 		let self_id = self.id;
 
-		for (&id, pr) in self.prs.iter_mut() {
+		for (&id, pr) in &mut self.prs {
 			*pr = Progress::new(last_index + 1, max_inflight as usize, false);
 			if id == self_id {
 				pr.matched = self.raft_log.last_index();
 			}
 		}
-		for (&id, pr) in self.learner_prs.iter_mut() {
+		for (&id, pr) in &mut self.learner_prs {
 			*pr = Progress::new(last_index + 1, max_inflight as usize, true);
 			if id == self_id {
 				pr.matched = self.raft_log.last_index();
@@ -680,7 +680,7 @@ impl<T: Storage> Raft<T> {
 				};
 
 				let n = num_of_pending_conf(&ents);
-				if n > 0 && self.raft_log.committed > self.raft_log.committed {
+				if n > 0 && self.raft_log.committed > self.raft_log.applied {
 					warn!(
 						"{} {} cannot campaign at term {} since there are still {} pending configuration changes to apply", 
 						self.tag,
@@ -817,7 +817,7 @@ impl<T: Storage> Raft<T> {
 			MessageType::MsgApp => {
 				self.election_elapsed = 0;
 				self.lead = msg.get_from();
-				self.handle_append_entries(msg);
+				self.handle_append_entries(&msg);
 			}
 			MessageType::MsgHeartbeat => {
 				self.election_elapsed = 0;
@@ -970,7 +970,7 @@ impl<T: Storage> Raft<T> {
 			MessageType::MsgApp => {
 				debug_assert_eq!(self.term, msg.get_term());
 				self.become_follower(msg.get_term(), msg.get_from());
-				self.handle_append_entries(msg);
+				self.handle_append_entries(&msg);
 			}
 			MessageType::MsgHeartbeat => {
 				debug_assert_eq!(self.term, msg.get_term());
@@ -1073,10 +1073,10 @@ impl<T: Storage> Raft<T> {
 	// bcast_heartbeat sends RPC, without entries to all the peers.
 	fn bcast_heartbeat(&mut self) {
 		let last_ctx = self.read_only.last_pending_request_ctx();
-		self.bcast_heartbeat_with_ctx(last_ctx);
+		self.bcast_heartbeat_with_ctx(&last_ctx);
 	}
 
-	fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
+	fn bcast_heartbeat_with_ctx(&mut self, ctx: &Option<Vec<u8>>) {
 		let self_id = self.id;
 		let prs = self.take_prs();
 		prs.iter().filter(|&(id, _)| *id != self_id).for_each(|(&id, pr)| {
@@ -1330,7 +1330,7 @@ impl<T: Storage> Raft<T> {
 		self.send(m);
 	}
 
-	fn handle_append_entries(&mut self, msg: Message) {
+	fn handle_append_entries(&mut self, msg: &Message) {
 		if msg.get_index() < self.raft_log.committed {
 			let mut m = Message::new();
 			m.set_to(msg.get_from());
@@ -1418,7 +1418,7 @@ impl<T: Storage> Raft<T> {
 	}
 
 	fn get_prs_ids(&self) -> Vec<u64> {
-		self.prs.keys().map(|id| *id).collect()
+		self.prs.keys().cloned().collect()
 	}
 
 	fn poll(&mut self, id: u64, t: MessageType, v: bool) -> usize {
@@ -1428,10 +1428,7 @@ impl<T: Storage> Raft<T> {
 			info!("{} {} received {:?} rejection from {} at term {}", self.tag, self.id, t, id, self.term);
 		}
 
-		if !self.votes.contains_key(&id) {
-			self.votes.insert(id, v);
-		}
-
+		self.votes.entry(id).or_insert(v);
 		self.votes.iter().filter(|&(_, vv)| *vv).count()
 	}
 

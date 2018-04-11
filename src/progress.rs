@@ -109,8 +109,8 @@ pub struct Progress {
 impl Progress {
     pub fn new(next: u64, ins_size: usize, is_learner: bool) -> Progress {
         Progress{
-            next: next,
-            is_learner: is_learner, 
+            next,
+            is_learner, 
             ins: Inflights::new(ins_size),
             ..Default::default()
         }
@@ -175,7 +175,7 @@ impl Progress {
             self.next = n + 1;
         }
 
-        return updated;
+        updated
     }
 
     // when the progress of a follower is in `replicate` state, leader sends 
@@ -247,7 +247,7 @@ pub struct Inflights {
 
 impl Inflights {
     pub fn new(cap: usize) -> Inflights {
-        return Inflights{
+        Inflights{
             buffer: Vec::with_capacity(cap),
             ..Default::default()
         }
@@ -273,7 +273,7 @@ impl Inflights {
 
         let mut next = self.start + self.count;
         if next >= self.cap() {
-            next = next - self.cap();
+            next -= self.cap();
         }
 
         self.buffer[next] = inflight;

@@ -49,7 +49,7 @@ pub struct ReadOnly {
 impl ReadOnly {
     pub fn new(option: ReadOnlyOption) -> ReadOnly {
         ReadOnly{
-            option: option,
+            option,
             pending_read_index: HashMap::new(),
             read_index_queue: VecDeque::new(),
         }

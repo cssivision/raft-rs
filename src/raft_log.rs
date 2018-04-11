@@ -45,11 +45,11 @@ impl<T: Storage> RaftLog<T> {
         let first_index = storage.first_index().unwrap();
 	    let last_index = storage.last_index().unwrap();
         RaftLog{
-            storage: storage,
+            storage,
             committed: first_index - 1,
             applied: first_index - 1,
             unstable: Unstable::new(last_index+1, tag.clone()),
-            tag: tag,
+            tag,
         }
     }
 
@@ -105,7 +105,7 @@ impl<T: Storage> RaftLog<T> {
         }
 
         match self.storage.term(i) {
-            Ok(t) => return Ok(t),
+            Ok(t) => Ok(t),
             Err(e) => {
                 match e {
                     Error::Storage(StorageError::Compacted) | Error::Storage(StorageError::Unavailable) => {},
