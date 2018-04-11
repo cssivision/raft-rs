@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::mem;
+use std::cmp;
+use std::iter::Iterator;
 
 use storage::Storage;
 use raft_log::RaftLog;
 use progress::{Progress, ProgressState};
 use errors::{Result, Error, StorageError};
-use raftpb::{Message, HardState, MessageType, Entry, Snapshot};
+use raftpb::{Message, HardState, MessageType, Entry, Snapshot, EntryType};
 use read_only::{ReadOnlyOption, ReadOnly, ReadState};
 use raw_node::SoftState;
 use util::{NO_LIMIT, num_of_pending_conf, vote_msg_resp_type};
@@ -896,10 +898,61 @@ impl<T: Storage> Raft<T> {
 		Ok(())
 	}
 
-	fn step_leader(&self, msg: Message) -> Result<()> {
+	fn step_leader(&mut self, mut msg: Message) -> Result<()> {
 		match msg.get_msg_type() {
 			MessageType::MsgBeat => {
+				self.bcast_heartbeat();
+				return Ok(());
+			}
+			MessageType::MsgCheckQuorum => {
+				if !self.check_quorum_active() {
+					warn!("{} {} stepped down to follower since quorum is not active", self.tag, self.id);
+					let term = self.term;
+					self.become_follower(term, NONE);
+				}
+				return Ok(());
+			}
+			MessageType::MsgProp => {
+				if msg.get_entries().is_empty() {
+					panic!("{} stepped empty MsgProp", self.id);
+				}
+				if !self.prs.contains_key(&self.id) {
+					// If we are not currently a member of the range (i.e. this node
+					// was removed from the configuration while serving as leader),
+					// drop any new proposals.
+					return Err(Error::ProposalDropped);
+				}
+				if self.lead_transferee != NONE {
+					debug!(
+						"{} {} [term {}] transfer leadership to {} is in progress; dropping proposal", 
+						self.tag,
+						self.id,
+						self.term,
+						self.lead_transferee,
+					);
+					return Err(Error::ProposalDropped);
+				}
 
+				for (i, e) in msg.mut_entries().iter_mut().enumerate() {
+					if e.get_entry_type() == EntryType::EntryConfChange {
+						if self.pending_conf_index > self.raft_log.applied {
+							info!(
+								"{} propose conf {:?} ignored since pending unapplied configuration [index {}, applied {}]",
+								self.tag,
+								e,
+								self.pending_conf_index,
+								self.raft_log.applied,
+							);
+							*e = Entry::new();
+                            e.set_entry_type(EntryType::EntryNormal);
+						}
+					} else {
+						self.pending_conf_index = self.raft_log.last_index() + i as u64 + 1;
+					}
+				}
+				self.append_entry(msg.mut_entries());
+				self.bcast_append();
+				return Ok(());
 			}
 			_ => return Ok(())
 		}
@@ -915,23 +968,17 @@ impl<T: Storage> Raft<T> {
 				return Err(Error::ProposalDropped);
 			}
 			MessageType::MsgApp => {
-				if msg.get_term() != self.term {
-					warn!("{} always should msg.term == self.term, but not", self.tag);
-				}
+				debug_assert_eq!(self.term, msg.get_term());
 				self.become_follower(msg.get_term(), msg.get_from());
 				self.handle_append_entries(msg);
 			}
 			MessageType::MsgHeartbeat => {
-				if msg.get_term() != self.term {
-					warn!("{} always should msg.term == self.term, but not", self.tag);
-				}
+				debug_assert_eq!(self.term, msg.get_term());
 				self.become_follower(msg.get_term(), msg.get_from());
 				self.handle_heartbeat(msg);
 			}
 			MessageType::MsgSnap => {
-				if msg.get_term() != self.term {
-					warn!("{} always should msg.term == self.term, but not", self.tag);
-				}
+				debug_assert_eq!(self.term, msg.get_term());
 				self.become_follower(msg.get_term(), msg.get_from());
 				self.handle_snapshot(msg);
 			}
@@ -996,14 +1043,71 @@ impl<T: Storage> Raft<T> {
 		self.set_learner_prs(learner_prs);
 	}
 
+	fn check_quorum_active(&mut self) -> bool {
+		let mut act = 0;
+		let self_id = self.id;
+		let prs = self.take_prs();
+		prs.iter().for_each(|(&id, pr)| {
+			if id == self_id {
+				act += 1;
+			}
+			if pr.recent_active {
+				act += 1;
+			}
+		});
+		self.set_prs(prs);
+
+		let learner_prs = self.take_learner_prs();
+		learner_prs.iter().for_each(|(&id, pr)| {
+			if id == self_id {
+				act += 1;
+			}
+			if pr.recent_active {
+				act += 1;
+			}
+		});
+		self.set_learner_prs(learner_prs);
+		act > self.quorum() 
+	}
+
 	// bcast_heartbeat sends RPC, without entries to all the peers.
 	fn bcast_heartbeat(&mut self) {
 		let last_ctx = self.read_only.last_pending_request_ctx();
 		self.bcast_heartbeat_with_ctx(last_ctx);
 	}
 
-	fn bcast_heartbeat_with_ctx(&self, ctx: Option<Vec<u8>>) {
+	fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
+		let self_id = self.id;
+		let prs = self.take_prs();
+		prs.iter().filter(|&(id, _)| *id != self_id).for_each(|(&id, pr)| {
+			self.send_heartbeat(id, ctx.clone(), pr);
+		});
+		self.set_prs(prs);
 
+		let learner_prs = self.take_learner_prs();
+		learner_prs.iter().filter(|&(id, _)| *id != self_id).for_each(|(&id, pr)| {
+			self.send_heartbeat(id, ctx.clone(), pr);
+		});
+		self.set_learner_prs(learner_prs);
+	}
+
+	fn send_heartbeat(&mut self, to: u64, ctx: Option<Vec<u8>>, pr: &Progress) {
+		// Attach the commit as min(to.matched, r.committed).
+		// When the leader sends out heartbeat message,
+		// the receiver(follower) might not be matched with the leader
+		// or it might not have all the committed entries.
+		// The leader MUST NOT forward the follower's commit to
+		// an unmatched index.
+		let commit = cmp::min(pr.matched, self.raft_log.committed);
+		let mut m = Message::new();
+		m.set_commit(commit);
+		m.set_to(to);
+		m.set_msg_type(MessageType::MsgHeartbeat);
+		if let Some(ctx) = ctx {
+			m.set_context(ctx);
+		}
+
+		self.send(m);
 	}
 
 	fn set_prs(&mut self, prs: HashMap<u64, Progress>) {
@@ -1126,10 +1230,9 @@ impl<T: Storage> Raft<T> {
 
 			let mut m = Message::new();
 			m.set_to(msg.get_from());
-			m.set_msg_type(MessageType::MsgSnap);
+			m.set_msg_type(MessageType::MsgAppResp);
 			m.set_index(self.raft_log.last_index());
 			self.send(m);
-
 		} else {
 			info!(
 				"{} {} [commit: {}] ignored snapshot [index: {}, term: {}]",
@@ -1142,7 +1245,7 @@ impl<T: Storage> Raft<T> {
 
 			let mut m = Message::new();
 			m.set_to(msg.get_from());
-			m.set_msg_type(MessageType::MsgSnap);
+			m.set_msg_type(MessageType::MsgAppResp);
 			m.set_index(self.raft_log.committed);
 			self.send(m);
 		}
@@ -1222,7 +1325,7 @@ impl<T: Storage> Raft<T> {
 		self.raft_log.commit_to(msg.get_commit());
 		let mut m = Message::new();
 		m.set_to(msg.get_from());
-		m.set_msg_type(MessageType::MsgAppResp);
+		m.set_msg_type(MessageType::MsgHeartbeatResp);
 		m.set_context(msg.take_context());
 		self.send(m);
 	}
@@ -1368,7 +1471,7 @@ impl<T: Storage> Raft<T> {
 			// proposals are a way to forward to the leader and
 			// should be treated as local message.
 			// MsgReadIndex is also forwarded to leader.
-			if msg.get_msg_type() == MessageType::MsgProp || msg.get_msg_type() == MessageType::MsgReadIndex {
+			if msg.get_msg_type() != MessageType::MsgProp && msg.get_msg_type() != MessageType::MsgReadIndex {
 				msg.set_term(self.term);
 			}
 		}
