@@ -58,4 +58,22 @@ impl ReadOnly {
     pub fn last_pending_request_ctx(&mut self) -> Option<Vec<u8>> {
         self.read_index_queue.back().cloned()
     }
+
+    // add_request adds a read only reuqest into readonly struct.
+    // `index` is the commit index of the raft state machine when it received
+    // the read only request.
+    // `m` is the original read only request message from the local or remote node.
+    pub fn add_request(&mut self, index: u64, msg: Message) {
+        let ctx = msg.get_entries()[0].get_data().to_vec();
+        if self.pending_read_index.contains_key(&ctx) {
+            return;
+        }
+        let ris = ReadIndexStatus{
+            index: index,
+            req: msg,
+            acks: HashSet::new(),
+        };
+        self.pending_read_index.insert(ctx.clone(), ris);
+        self.read_index_queue.push_back(ctx);
+    }
 }

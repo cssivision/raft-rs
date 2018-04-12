@@ -209,6 +209,8 @@ impl Progress {
         self.state == ProgressState::Snapshot && self.matched >= self.pending_snapshot
     }
 
+    // maybe_decr_to returns false if the given to index comes from an out of order message.
+    // Otherwise it decreases the progress next index to min(rejected, last) and returns true.
     pub fn maybe_decr_to(&mut self, rejected: u64, last: u64) -> bool {
         if self.state == ProgressState::Replicate {
             // the rejection must be stale if the progress has matched and "rejected"
@@ -278,5 +280,38 @@ impl Inflights {
 
         self.buffer[next] = inflight;
         self.count += 1;
+    }
+
+    // free_to frees the inflights smaller or equal to the given `to` flight.
+    pub fn free_to(&mut self, to: u64) {
+        if self.count == 0 || to < self.buffer[self.start] {
+            // out of the left side of the window
+            return;
+        }
+
+        let mut i: usize = 0;
+        let mut idx = self.start;
+        while i < self.count {
+            if to < self.buffer[idx] {
+                break 
+            }
+
+            let size = self.cap();
+            // increase index and maybe rotate
+            idx += 1;
+            if idx > size {
+                idx -= size;
+            }
+            i += 1;
+        }
+
+        // free i inflights and set new start index
+        self.count -= i;
+        self.start = idx;
+        if self.count == 0 {
+            // inflights is empty, reset the start index so that we don't grow the
+		    // buffer unnecessarily.
+            self.start = 0;
+        }
     }
 }

@@ -338,14 +338,14 @@ impl<T: Storage> Raft<T> {
 	// maybe_commit attempts to advance the commit index. Returns true if
 	// the commit index changed (in which case the caller should call
 	// self.bcastAppend).
-	fn maybe_commit(&mut self) {
+	fn maybe_commit(&mut self) -> bool {
 		let mut matched_indexs = Vec::with_capacity(self.prs.len());
 		for p in self.prs.values() {
 			matched_indexs.push(p.matched);
 		}
 		matched_indexs.sort_by(|a, b| b.cmp(a));
 		let max_matched_index = matched_indexs[self.quorum()-1];
-		self.raft_log.maybe_commit(max_matched_index, self.term);
+		self.raft_log.maybe_commit(max_matched_index, self.term)
 	}
 
 	pub fn become_follower(&mut self, term: u64, lead: u64) {
@@ -954,9 +954,122 @@ impl<T: Storage> Raft<T> {
 				self.bcast_append();
 				return Ok(());
 			}
-			_ => return Ok(())
+			MessageType::MsgReadIndex => {
+				if self.quorum() > 1 {
+					if self.raft_log.zero_term_on_err_compacted(self.raft_log.term(self.raft_log.committed)) != self.term {
+						// Reject read only request when this leader has not committed any log entry at its term.
+						return Ok(());
+					}
+
+					// thinking: use an interally defined context instead of the user given context.
+					// We can express this in terms of the term and index instead of a user-supplied value.
+					// This would allow multiple reads to piggyback on the same message.
+					match self.read_only.option {
+						ReadOnlyOption::Safe => {
+							let ctx = msg.get_entries()[0].get_data().to_vec();
+							self.read_only.add_request(self.raft_log.committed, msg);
+							self.bcast_heartbeat_with_ctx(&Some(ctx));
+						}
+						ReadOnlyOption::LeaseBased => {
+							let ri = self.raft_log.committed;
+							if msg.get_from() == NONE || msg.get_from() == self.id {
+								let rs = ReadState{
+									index: ri,
+									request_ctx:msg.take_entries()[0].take_data(),
+								};
+								self.read_states.push(rs);
+							} else {
+								let mut m = Message::new();
+								m.set_to(msg.get_from());
+								m.set_msg_type(MessageType::MsgReadIndexResp);
+								m.set_index(ri);
+								m.set_entries(msg.take_entries());
+								self.send(m);
+							}
+						}
+					}
+				} else {
+					let rs = ReadState{
+						index: self.raft_log.committed,
+						request_ctx: msg.take_entries()[0].take_data(),
+					};
+					self.read_states.push(rs);
+				}
+				Ok(())
+			}
+			_ => {
+				// All other message types require a progress for msg.from (pr).
+				if !self.prs.contains_key(&msg.get_from()) {
+					debug!("{} {} no progress available for {}", self.tag, self.id, msg.get_from());
+					return Ok(());
+				}
+				let mut prs = self.take_prs();
+				if let Some(pr) = prs.get_mut(&msg.get_from()) {
+					match msg.get_msg_type() {
+						MessageType::MsgAppResp => {
+							pr.recent_active = true;
+							if msg.get_reject() {
+								debug!(
+									"{} {} received msgApp rejection(lastindex: {}) from {} for index {}",
+									self.tag,
+									self.id,
+									msg.get_reject_hint(),
+									msg.get_from(),
+									msg.get_index(),
+								);
+
+								if pr.maybe_decr_to(msg.get_index(), msg.get_reject_hint()) {
+									debug!(
+										"{} {} decreased progress of {} to [{:?}]", 
+										self.tag,
+										self.id,
+										msg.get_from(),
+										pr,
+									);
+									if pr.state == ProgressState::Replicate {
+										pr.become_probe();
+									}
+									self.send_append(msg.get_from(), pr);
+								}
+							} else {
+								let old_paused = pr.is_paused();
+								if pr.maybe_update(msg.get_index()) {
+									if pr.state == ProgressState::Probe {
+										pr.become_replicate();
+									} else if pr.state == ProgressState::Snapshot && pr.need_snapshot_abort() {
+										pr.become_probe();
+									} else {
+										pr.ins.free_to(msg.get_index());
+									}
+
+									if self.maybe_commit() {
+										self.bcast_append();
+									} else if old_paused {
+										// update() reset the wait state on this node. If we had delayed sending
+										// an update before, send it now.
+										self.send_append(msg.get_from(), pr);
+									}
+
+									// Transfer leadership is in progress.
+									if msg.get_from() == self.lead_transferee {
+										info!(
+											"{} {} sent MsgTimeoutNow to {} after received MsgAppResp",
+											self.tag,
+											self.id,
+											msg.get_from(),
+										);
+										self.send_timeout_now(msg.get_from());
+									}
+								}
+							}
+						}
+						_ => {}
+					}
+				}
+				self.set_prs(prs);
+				Ok(())
+			}
 		}
-		Ok(())
 	}
 
 	// step_candidate is shared by Candidate and PreCandidate; the difference is
@@ -1041,6 +1154,13 @@ impl<T: Storage> Raft<T> {
 			self.send_append(id, &mut pr);
 		});
 		self.set_learner_prs(learner_prs);
+	}
+
+	fn send_timeout_now(&self, to: u64) {
+		let mut m = Message::new();
+		m.set_to(to);
+		m.set_msg_type(MessageType::MsgTimeoutNow);
+		self.send(m);
 	}
 
 	fn check_quorum_active(&mut self) -> bool {
