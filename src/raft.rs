@@ -1156,7 +1156,7 @@ impl<T: Storage> Raft<T> {
 		self.set_learner_prs(learner_prs);
 	}
 
-	fn send_timeout_now(&self, to: u64) {
+	fn send_timeout_now(&mut self, to: u64) {
 		let mut m = Message::new();
 		m.set_to(to);
 		m.set_msg_type(MessageType::MsgTimeoutNow);
