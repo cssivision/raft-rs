@@ -163,7 +163,7 @@ pub struct Raft<T: Storage> {
     pub id: u64,
     pub term: u64,
 	pub vote: u64,
-	read_states: Vec<ReadState>,
+	pub read_states: Vec<ReadState>,
     pub raft_log: RaftLog<T>,
 	pub max_inflight: u64,
 	pub max_msg_size: u64,
@@ -534,8 +534,17 @@ impl<T: Storage> Raft<T> {
         hs
 	}
 
+	pub fn tick(&mut self) {
+		match self.state {
+            StateType::Follower | StateType::PreCandidate | StateType::Candidate => {
+                self.tick_election()
+            }
+            StateType::Leader => self.tick_heartbeat(),
+        }
+	}
+
 	/// tick_election is run by followers and candidates after election_timeout.
-	pub fn tick_election(&mut self) {
+	fn tick_election(&mut self) {
 		self.election_elapsed += 1;
 		if self.promotable() && self.past_election_timeout() {
 			self.election_elapsed = 0;
@@ -545,6 +554,39 @@ impl<T: Storage> Raft<T> {
 			self.step(msg).is_ok();
 		}
 	} 
+
+	fn tick_heartbeat(&mut self) {
+		self.heartbeat_elapsed += 1;
+		self.election_elapsed += 1;
+
+		if self.election_elapsed >= self.election_timeout {
+			self.election_elapsed = 0;
+
+			if self.check_quorum {
+				let mut m = Message::new();
+				m.set_from(self.id);
+				m.set_msg_type(MessageType::MsgCheckQuorum);
+				self.step(m).is_ok();
+			}
+
+			// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
+			if self.state == StateType::Leader && self.lead_transferee != NONE {
+				self.abort_leader_transfer();
+			}
+		}
+
+		if self.state != StateType::Leader {
+			return
+		}
+
+		if self.heartbeat_elapsed >= self.heartbeat_timeout {
+			self.heartbeat_elapsed = 0;
+			let mut m = Message::new();
+			m.set_from(self.id);
+			m.set_msg_type(MessageType::MsgBeat);
+			self.step(m).is_ok();
+		}
+	}
 
 	/// promotable indicates whether state machine can be promoted to leader,
 	/// which is true when its own id is in progress list.

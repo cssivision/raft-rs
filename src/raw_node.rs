@@ -1,9 +1,10 @@
 use errors::Result;
 use raft::{Raft, Config, NONE, StateType, Peer};
 use storage::{Storage};
-use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType};
+use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType, Message, MessageType, Snapshot};
+use read_only::ReadState;
 
-use protobuf;
+use protobuf::{self, RepeatedField};
 
 // SoftState provides state that is useful for logging and debugging.
 // The state is volatile and does not need to be persisted to the WAL.
@@ -17,6 +18,80 @@ pub struct RawNode<T: Storage> {
     pub raft: Raft<T>,
     pub pre_soft_state: SoftState,
     pub pre_hard_state: HardState,
+}
+
+// Ready encapsulates the entries and messages that are ready to read,
+// be saved to stable storage, committed or sent to other peers.
+// All fields in Ready are read-only.
+#[derive(Debug, Default)]
+pub struct Ready {
+    // The current volatile state of a Node.
+	// SoftState will be nil if there is no update.
+	// It is not required to consume or store SoftState.
+    pub soft_state: Option<SoftState>,
+
+    // The current state of a Node to be saved to stable storage BEFORE
+	// Messages are sent.
+	// HardState will be equal to empty state if there is no update.
+    pub hard_state: HardState,
+
+    // read_states can be used for node to serve linearizable read requests locally
+	// when its applied index is greater than the index in ReadState.
+	// Note that the readState will be returned when raft receives msgReadIndex.
+	// The returned is only valid for the request that requested to read.
+    pub read_states: Vec<ReadState>,
+
+    // entries specifies entries to be saved to stable storage BEFORE
+	// Messages are sent.
+    pub entries: Vec<Entry>,
+
+    // Snapshot specifies the snapshot to be saved to stable storage.
+    pub snapshot: Snapshot,
+
+    // committed_entries specifies entries to be committed to a
+	// store/state-machine. These have previously been committed to stable
+	// store.
+    pub committed_entries: Vec<Entry>,
+
+    // messages specifies outbound messages to be sent AFTER Entries are
+	// committed to stable storage.
+	// If it contains a MsgSnap message, the application MUST report back to raft
+	// when the snapshot has been received or has failed by calling ReportSnapshot.
+    pub messages: Vec<Message>,
+
+    // must_sync indicates whether the HardState and Entries must be synchronously
+	// written to disk or if an asynchronous write is permissible.
+    pub must_sync: bool,
+}
+
+impl Ready {
+    fn new<T: Storage>(r: &Raft<T>, prev_soft_state: &SoftState, prev_hard_state: &HardState) -> Ready {
+        let mut rd = Ready{
+            entries: r.raft_log.unstable_entries(),
+            committed_entries: r.raft_log.next_ents(),
+            messages: r.msgs.clone(),
+            ..Default::default()
+        };
+        let ss = r.soft_state();
+        if &ss != prev_soft_state {
+            rd.soft_state = Some(ss);
+        }
+        let hs = r.hard_state();
+        if &hs != prev_hard_state {
+            rd.hard_state = hs;
+        }
+        if let Some(ref s) = r.raft_log.unstable.snapshot {
+            rd.snapshot = s.clone();
+        }
+        if !r.read_states.is_empty() {
+            rd.read_states = r.read_states.clone();
+        }
+
+        rd.must_sync = !rd.entries.is_empty() 
+            || rd.hard_state.get_vote() != prev_hard_state.get_vote() 
+            || rd.hard_state.get_term() != prev_hard_state.get_term();
+        rd 
+    }
 }
 
 impl<T: Storage> RawNode<T> {
@@ -65,5 +140,74 @@ impl<T: Storage> RawNode<T> {
             rn.pre_hard_state = rn.raft.hard_state();
         }
         Ok(rn)
+    }
+
+    // tick advances the internal logical clock by a single tick.
+    pub fn tick(&mut self) {
+        self.raft.tick();
+    }
+
+    // Propose proposes data be appended to the raft log.
+    pub fn propose(&mut self, data: Vec<u8>) -> Result<()> {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgProp);
+        m.set_from(self.raft.id);
+        let mut e = Entry::new();
+        e.set_data(data);
+        m.set_entries(RepeatedField::from_vec(vec![e]));
+        self.raft.step(m)
+    }
+
+    // ProposeConfChange proposes a config change.
+    pub fn propose_conf_change(&mut self, cc: ConfChange) -> Result<()> {
+        let data = protobuf::Message::write_to_bytes(&cc)?;
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgProp);
+        let mut e = Entry::new();
+        e.set_entry_type(EntryType::EntryConfChange);
+        e.set_data(data);
+        m.set_entries(RepeatedField::from_vec(vec![e]));
+        self.raft.step(m)
+    }
+
+    pub fn ready(&self) -> Ready {
+        Ready::new(&self.raft, &self.pre_soft_state, &self.pre_hard_state)
+    }
+
+    pub fn advance(&mut self, rd: Ready) {
+        self.commit_ready(rd);
+    }
+
+    pub fn commit_ready(&mut self, rd: Ready) {
+        if let Some(ss) = rd.soft_state {
+            self.pre_soft_state = ss;
+        }
+        if rd.hard_state != HardState::new() {
+            self.pre_hard_state = rd.hard_state;
+        }
+
+        if self.pre_hard_state.commit != 0 {
+            // In most cases, prevHardSt and rd.HardState will be the same
+            // because when there are new entries to apply we just sent a
+            // HardState with an updated Commit value. However, on initial
+            // startup the two are different because we don't send a HardState
+            // until something changes, but we do send any un-applied but
+            // committed entries (and previously-committed entries may be
+            // incorporated into the snapshot, even if rd.CommittedEntries is
+            // empty). Therefore we mark all committed entries as applied
+            // whether they were included in rd.HardState or not.
+            self.raft.raft_log.applied_to(self.pre_hard_state.commit);
+        }
+
+        if !rd.entries.is_empty() {
+            let e = &rd.entries[rd.entries.len()-1];
+            self.raft.raft_log.stable_to(e.get_index(), e.get_term());
+        }
+        if rd.snapshot != Snapshot::new() {
+            self.raft.raft_log.stable_snap_to(rd.snapshot.get_metadata().get_index());
+        }
+        if !rd.read_states.is_empty() {
+            self.raft.read_states = vec![];
+        }
     }
 }

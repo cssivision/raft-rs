@@ -7,7 +7,7 @@ use raftpb::{Message};
 // this state from ready, it's also caller's duty to differentiate if this
 // state is what it requests through request_ctx, eg. given a unique id as
 // request_ctx
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadState {
     pub index: u64,
     pub request_ctx: Vec<u8>,

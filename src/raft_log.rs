@@ -4,7 +4,7 @@ use storage::Storage;
 use log_unstable::Unstable;
 use raftpb::{Entry, Snapshot};
 use errors::{Error, Result, StorageError};
-use util::limit_size;
+use util::{limit_size, NO_LIMIT};
 
 #[derive(Default)]
 pub struct RaftLog<T: Storage> {
@@ -13,7 +13,7 @@ pub struct RaftLog<T: Storage> {
 
     /// unstable contains all unstable entries and snapshot.
 	/// they will be saved into storage.
-    unstable: Unstable,
+    pub unstable: Unstable,
 
     /// committed is the highest log position that is known to be in
 	/// stable storage on a quorum of nodes.
@@ -323,5 +323,28 @@ impl<T: Storage> RaftLog<T> {
         }
 
         self.storage.snapshot()
+    }
+
+    pub fn unstable_entries(&self) -> Vec<Entry> {
+        self.unstable.entries.to_vec()
+    }
+
+    pub fn next_ents(&self) -> Vec<Entry> {
+        let off = cmp::max(self.applied+1, self.first_index());
+        if self.committed+1 > off {
+            match self.slice(off, self.committed+1, NO_LIMIT) {
+                Ok(ents) => return ents,
+                Err(e) => panic!("unexpected error when getting unapplied entries ({})", e)
+            }
+        }
+        vec![]
+    }
+
+    pub fn stable_to(&self, index: u64, term: u64) {
+        self.unstable.stable_to(index, term);
+    }
+
+    pub fn stable_snap_to(&mut self, index: u64) {
+        self.unstable.stable_snap_to(index);
     }
 }

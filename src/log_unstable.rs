@@ -110,4 +110,22 @@ impl Unstable {
         self.entries.clear(); 
         self.snapshot = Some(s);
     }
+
+    pub fn stable_to(&self, i: u64, t: u64) {
+        if let Some(gt) = self.maybe_term(i) {
+            if gt == t && i >= self.offset {
+
+            }
+        }
+    }
+
+    pub fn stable_snap_to(&mut self, i: u64) {
+        if self.snapshot.is_none() {
+            return;
+        }
+
+        if self.snapshot.as_ref().unwrap().get_metadata().get_index() == i {
+            self.snapshot = None;
+        }
+    }
 }
