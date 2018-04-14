@@ -15,7 +15,7 @@ pub struct Unstable {
 }
 
 impl Unstable {
-    pub fn new(offset: u64, tag: String) -> Unstable {
+    pub(crate) fn new(offset: u64, tag: String) -> Unstable {
         Unstable{
             snapshot: None,
             entries: vec![],
@@ -26,7 +26,7 @@ impl Unstable {
 
     /// maybe_term returns the term of the entry at index i, if there
     /// is any.
-    pub fn maybe_term(&self, i: u64) -> Option<u64> {
+    pub(crate) fn maybe_term(&self, i: u64) -> Option<u64> {
         if i < self.offset {
             if let Some(sn) = self.snapshot.as_ref() {
                 return Some(sn.get_metadata().get_term());
@@ -45,7 +45,7 @@ impl Unstable {
 
     /// maybe_first_index returns the index of the first possible entry in entries
     /// if it has a snapshot.
-    pub fn maybe_first_index(&self) -> Option<u64> {
+    pub(crate) fn maybe_first_index(&self) -> Option<u64> {
          self.snapshot
             .as_ref()
             .map(|snap| snap.get_metadata().get_index() + 1)
@@ -53,7 +53,7 @@ impl Unstable {
 
     // maybe_last_index returns the last index if it has at least one
     // unstable entry or snapshot.
-    pub fn maybe_last_index(&self) -> Option<u64> {
+    pub(crate) fn maybe_last_index(&self) -> Option<u64> {
         match self.entries.len() {
             0 => self.snapshot
                 .as_ref()
@@ -62,7 +62,7 @@ impl Unstable {
         }
     } 
 
-    pub fn truncate_and_append(&mut self, ents: &[Entry]) {
+    pub(crate) fn truncate_and_append(&mut self, ents: &[Entry]) {
         if ents.is_empty() {
             return
         }
@@ -82,7 +82,7 @@ impl Unstable {
         }
     }
 
-    pub fn slice(&self, lo: u64, hi: u64) -> &[Entry] {
+    pub(crate) fn slice(&self, lo: u64, hi: u64) -> &[Entry] {
         self.must_check_out_of_bounds(lo, hi);
         let l = lo as usize;
         let h = hi as usize;
@@ -90,7 +90,7 @@ impl Unstable {
         &self.entries[l - off..h - off]
     }
 
-    pub fn must_check_out_of_bounds(&self, low: u64, hight: u64) {
+    pub(crate) fn must_check_out_of_bounds(&self, low: u64, hight: u64) {
         if low > hight {
             panic!("invlid unstable slice {} > {}", low, hight);
         }
@@ -105,13 +105,13 @@ impl Unstable {
         }
     }
 
-    pub fn restore(&mut self, s: Snapshot) {
+    pub(crate) fn restore(&mut self, s: Snapshot) {
         self.offset = s.get_metadata().get_index();
         self.entries.clear(); 
         self.snapshot = Some(s);
     }
 
-    pub fn stable_to(&self, i: u64, t: u64) {
+    pub(crate) fn stable_to(&self, i: u64, t: u64) {
         if let Some(gt) = self.maybe_term(i) {
             if gt == t && i >= self.offset {
 
@@ -119,7 +119,7 @@ impl Unstable {
         }
     }
 
-    pub fn stable_snap_to(&mut self, i: u64) {
+    pub(crate) fn stable_snap_to(&mut self, i: u64) {
         if self.snapshot.is_none() {
             return;
         }

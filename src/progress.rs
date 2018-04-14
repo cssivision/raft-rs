@@ -153,7 +153,7 @@ impl Progress {
         self.pending_snapshot = index;
     }
 
-    fn resume(&mut self) {
+    pub(crate) fn resume(&mut self) {
         self.paused = false;
     }
 
@@ -248,18 +248,19 @@ pub struct Inflights {
 }
 
 impl Inflights {
-    pub fn new(cap: usize) -> Inflights {
+    pub(crate) fn new(cap: usize) -> Inflights {
         Inflights{
             buffer: Vec::with_capacity(cap),
             ..Default::default()
         }
     }
+    
     fn reset(&mut self) {
         self.start = 0;
         self.count = 0;
     }
 
-    fn full(&self) -> bool {
+    pub(crate) fn full(&self) -> bool {
         self.count == self.cap()
     }
 
@@ -268,7 +269,7 @@ impl Inflights {
     }
 
     // add adds an inflight into inflights
-    pub fn add(&mut self, inflight: u64) {
+    pub(crate) fn add(&mut self, inflight: u64) {
         if self.full() {
             panic!("cannot add into a full inflights");
         }
@@ -282,8 +283,13 @@ impl Inflights {
         self.count += 1;
     }
 
+    pub(crate) fn free_first_one(&mut self) {
+        let to = self.buffer[self.start];
+        self.free_to(to);
+    }
+
     // free_to frees the inflights smaller or equal to the given `to` flight.
-    pub fn free_to(&mut self, to: u64) {
+    pub(crate) fn free_to(&mut self, to: u64) {
         if self.count == 0 || to < self.buffer[self.start] {
             // out of the left side of the window
             return;

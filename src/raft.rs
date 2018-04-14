@@ -769,7 +769,7 @@ impl<T: Storage> Raft<T> {
 				|| (msg.get_msg_type() == MessageType::MsgPreVote && msg.get_term() > self.term);
 
 			// ...and we believe the candidate is up to date.
-			if can_vote && self.raft_log.is_up_to_date(msg.get_index(), msg.get_term()) {
+			if can_vote && self.raft_log.is_up_to_date(msg.get_index(), msg.get_log_term()) {
 				info!(
 					"{} {} [logterm: {}, index: {}, vote: {}] cast {:?} for {} [logterm: {}, index: {}] at term {}",
 					self.tag,
@@ -1049,67 +1049,172 @@ impl<T: Storage> Raft<T> {
 				if let Some(pr) = prs.get_mut(&msg.get_from()) {
 					match msg.get_msg_type() {
 						MessageType::MsgAppResp => {
-							pr.recent_active = true;
-							if msg.get_reject() {
-								debug!(
-									"{} {} received msgApp rejection(lastindex: {}) from {} for index {}",
-									self.tag,
-									self.id,
-									msg.get_reject_hint(),
-									msg.get_from(),
-									msg.get_index(),
-								);
-
-								if pr.maybe_decr_to(msg.get_index(), msg.get_reject_hint()) {
-									debug!(
-										"{} {} decreased progress of {} to [{:?}]", 
-										self.tag,
-										self.id,
-										msg.get_from(),
-										pr,
-									);
-									if pr.state == ProgressState::Replicate {
-										pr.become_probe();
-									}
-									self.send_append(msg.get_from(), pr);
-								}
-							} else {
-								let old_paused = pr.is_paused();
-								if pr.maybe_update(msg.get_index()) {
-									if pr.state == ProgressState::Probe {
-										pr.become_replicate();
-									} else if pr.state == ProgressState::Snapshot && pr.need_snapshot_abort() {
-										pr.become_probe();
-									} else {
-										pr.ins.free_to(msg.get_index());
-									}
-
-									if self.maybe_commit() {
-										self.bcast_append();
-									} else if old_paused {
-										// update() reset the wait state on this node. If we had delayed sending
-										// an update before, send it now.
-										self.send_append(msg.get_from(), pr);
-									}
-
-									// Transfer leadership is in progress.
-									if msg.get_from() == self.lead_transferee {
-										info!(
-											"{} {} sent MsgTimeoutNow to {} after received MsgAppResp",
-											self.tag,
-											self.id,
-											msg.get_from(),
-										);
-										self.send_timeout_now(msg.get_from());
-									}
-								}
-							}
+							self.handle_append_resp(pr, &msg);
+						}
+						MessageType::MsgHeartbeatResp => {
+							self.handle_heartbeat_resp(pr, &msg);
+						}
+						MessageType::MsgSnapStatus => {
+							self.handle_snap_status(pr, &msg);
+						}
+						MessageType::MsgUnreachable => {
+							self.handle_unreachable(pr, &msg);
+						}
+						MessageType::MsgTransferLeader => {
+							self.handle_transfer_leader(pr, &msg);
 						}
 						_ => {}
 					}
 				}
 				self.set_prs(prs);
 				Ok(())
+			}
+		}
+	}
+
+	fn handle_transfer_leader(&mut self, pr: &mut Progress, msg: &Message) {
+		unimplemented!()
+	}
+
+	fn handle_unreachable(&mut self, pr: &mut Progress, msg: &Message) {
+		// During optimistic replication, if the remote becomes unreachable,
+		// there is huge probability that a MsgApp is lost.
+		if pr.state == ProgressState::Replicate {
+			pr.become_probe();
+		}
+
+		debug!(
+			"{} failed to send message to {} because it is unreachable [{:?}]", 
+			self.tag,
+			msg.get_from(),
+			pr,
+		);
+	}
+
+	fn handle_snap_status(&mut self, pr: &mut Progress, msg: &Message) {
+		if pr.state != ProgressState::Snapshot {
+			return;
+		}
+		if !msg.get_reject() {
+			pr.become_probe();
+			debug!(
+				"{} {} snapshot succeeded, resumed sending replication messages to {} [{:?}]", 
+				self.tag,
+				self.id,
+				msg.get_from(),
+				pr,
+			);
+		} else {
+			pr.snapshot_failure();
+			pr.become_probe();
+			debug!(
+				"{} {} snapshot failed, resumed sending replication messages to {} [{:?}]", 
+				self.tag,
+				self.id,
+				msg.get_from(),
+				pr,
+			);
+		}
+
+		// If snapshot finish, wait for the msgAppResp from the remote node before sending
+		// out the next msgApp.
+		// If snapshot failure, wait for a heartbeat interval before next try
+		pr.pause();
+	}
+
+	fn handle_heartbeat_resp(&mut self, pr: &mut Progress, msg: &Message) {
+		pr.recent_active = true;
+		pr.resume();
+
+		if pr.state == ProgressState::Replicate && pr.ins.full() {
+			pr.ins.free_first_one();
+		}
+		if pr.matched < self.raft_log.last_index() {
+			self.send_append(msg.get_from(), pr);
+		}
+		if self.read_only.option != ReadOnlyOption::Safe || msg.get_context().is_empty() {
+			return;
+		}
+
+		let ack_count = self.read_only.recv_ack(&msg);
+		if ack_count < self.quorum() {
+			return;
+		}
+
+		let rss = self.read_only.advance(&msg);
+		for rs in rss {
+			let mut req = rs.req;
+			if req.get_from() == NONE || req.get_from() == self.id {
+				let s = ReadState{
+					index: rs.index,
+					request_ctx: req.take_entries()[0].take_data(),
+				};
+				self.read_states.push(s);
+			} else {
+				let mut m = Message::new();
+				m.set_to(msg.get_from());
+				m.set_msg_type(MessageType::MsgReadIndexResp);
+				m.set_index(rs.index);
+				m.set_entries(RepeatedField::from_vec(msg.get_entries().to_vec()));
+				self.send(m);
+			}
+		}
+	}
+
+	fn handle_append_resp(&mut self, pr: &mut Progress, msg: &Message) {
+		pr.recent_active = true;
+		if msg.get_reject() {
+			debug!(
+				"{} {} received msgApp rejection(lastindex: {}) from {} for index {}",
+				self.tag,
+				self.id,
+				msg.get_reject_hint(),
+				msg.get_from(),
+				msg.get_index(),
+			);
+
+			if pr.maybe_decr_to(msg.get_index(), msg.get_reject_hint()) {
+				debug!(
+					"{} {} decreased progress of {} to [{:?}]", 
+					self.tag,
+					self.id,
+					msg.get_from(),
+					pr,
+				);
+				if pr.state == ProgressState::Replicate {
+					pr.become_probe();
+				}
+				self.send_append(msg.get_from(), pr);
+			}
+		} else {
+			let old_paused = pr.is_paused();
+			if pr.maybe_update(msg.get_index()) {
+				if pr.state == ProgressState::Probe {
+					pr.become_replicate();
+				} else if pr.state == ProgressState::Snapshot && pr.need_snapshot_abort() {
+					pr.become_probe();
+				} else {
+					pr.ins.free_to(msg.get_index());
+				}
+
+				if self.maybe_commit() {
+					self.bcast_append();
+				} else if old_paused {
+					// update() reset the wait state on this node. If we had delayed sending
+					// an update before, send it now.
+					self.send_append(msg.get_from(), pr);
+				}
+
+				// Transfer leadership is in progress.
+				if msg.get_from() == self.lead_transferee {
+					info!(
+						"{} {} sent MsgTimeoutNow to {} after received MsgAppResp",
+						self.tag,
+						self.id,
+						msg.get_from(),
+					);
+					self.send_timeout_now(msg.get_from());
+				}
 			}
 		}
 	}

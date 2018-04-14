@@ -34,8 +34,8 @@ impl Default for ReadOnlyOption {
 
 #[derive(Default, Debug, Clone)]
 pub struct ReadIndexStatus {
-    req: Message,
-    index: u64,
+    pub req: Message,
+    pub index: u64,
     acks: HashSet<u64>,
 }
 
@@ -47,7 +47,7 @@ pub struct ReadOnly {
 }
 
 impl ReadOnly {
-    pub fn new(option: ReadOnlyOption) -> ReadOnly {
+    pub(crate) fn new(option: ReadOnlyOption) -> ReadOnly {
         ReadOnly{
             option,
             pending_read_index: HashMap::new(),
@@ -55,7 +55,7 @@ impl ReadOnly {
         }
     }
 
-    pub fn last_pending_request_ctx(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn last_pending_request_ctx(&mut self) -> Option<Vec<u8>> {
         self.read_index_queue.back().cloned()
     }
 
@@ -63,7 +63,7 @@ impl ReadOnly {
     // `index` is the commit index of the raft state machine when it received
     // the read only request.
     // `m` is the original read only request message from the local or remote node.
-    pub fn add_request(&mut self, index: u64, msg: Message) {
+    pub(crate) fn add_request(&mut self, index: u64, msg: Message) {
         let ctx = msg.get_entries()[0].get_data().to_vec();
         if self.pending_read_index.contains_key(&ctx) {
             return;
@@ -75,5 +75,37 @@ impl ReadOnly {
         };
         self.pending_read_index.insert(ctx.clone(), ris);
         self.read_index_queue.push_back(ctx);
+    }
+
+    // recv_ack notifies the readonly struct that the raft state machine received
+    // an acknowledgment of the heartbeat that attached with the read only request
+    // context.
+    pub(crate) fn recv_ack(&mut self, msg: &Message) -> usize {
+        if let Some(rs) = self.pending_read_index.get_mut(msg.get_context()) {
+            rs.acks.insert(msg.get_from());
+            rs.acks.len() + 1
+        } else {
+            0
+        }
+    }
+
+    // advance advances the read only request queue kept by the readonly struct.
+    // It dequeues the requests until it finds the read only request that has
+    // the same context as the given `msg`.
+    pub(crate) fn advance(&mut self, msg: &Message) -> Vec<ReadIndexStatus> {
+        let mut rss = vec![];
+        if let Some(i) = self.read_index_queue.iter().position(|x| {
+            if !self.pending_read_index.contains_key(x) {
+                panic!("cannot find correspond read state from pending map");
+            }
+            *x == msg.get_context()
+        }) {
+            for _ in 0..i + 1 {
+                let rs = self.read_index_queue.pop_front().unwrap();
+                let status = self.pending_read_index.remove(&rs).unwrap();
+                rss.push(status);
+            }
+        }
+        rss
     }
 }
