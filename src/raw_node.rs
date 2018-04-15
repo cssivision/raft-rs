@@ -178,7 +178,7 @@ impl<T: Storage> RawNode<T> {
         self.commit_ready(rd);
     }
 
-    pub fn commit_ready(&mut self, rd: Ready) {
+    fn commit_ready(&mut self, rd: Ready) {
         if let Some(ss) = rd.soft_state {
             self.pre_soft_state = ss;
         }

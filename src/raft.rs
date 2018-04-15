@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::mem;
 use std::cmp;
-use std::iter::Iterator;
 
 use storage::Storage;
 use raft_log::RaftLog;
@@ -1046,7 +1045,8 @@ impl<T: Storage> Raft<T> {
 					return Ok(());
 				}
 				let mut prs = self.take_prs();
-				if let Some(pr) = prs.get_mut(&msg.get_from()) {
+				let mut learner_prs = self.take_learner_prs();
+				if let Some(pr) = prs.get_mut(&msg.get_from()).or(learner_prs.get_mut(&msg.get_from())) {
 					match msg.get_msg_type() {
 						MessageType::MsgAppResp => {
 							self.handle_append_resp(pr, &msg);
@@ -1067,13 +1067,64 @@ impl<T: Storage> Raft<T> {
 					}
 				}
 				self.set_prs(prs);
+				self.set_learner_prs(learner_prs);
 				Ok(())
 			}
 		}
 	}
 
 	fn handle_transfer_leader(&mut self, pr: &mut Progress, msg: &Message) {
-		unimplemented!()
+		if pr.is_learner {
+			debug!("{} {} is learner. Ignored transferring leadership", self.tag, self.id);
+			return;
+		}
+
+		let lead_transferee = msg.get_from();
+		let last_lead_transferee = self.lead_transferee;
+
+		if last_lead_transferee != NONE {
+			if last_lead_transferee == lead_transferee {
+				info!(
+					"{} {} [term {}] transfer leadership to {} is in progress, ignores request to same node {}",
+					self.tag,
+					self.id,
+					self.term,
+					lead_transferee,
+					lead_transferee,
+				);
+				return;
+			}
+
+			self.abort_leader_transfer();
+			info!("{} {} [term {}] abort previous transferring leadership to {}", 
+				self.tag,
+				self.id,
+				self.term,
+				last_lead_transferee,
+			);
+		}
+
+		if lead_transferee == self.id {
+			debug!("{} {} is already leader. Ignored transferring leadership to self", self.tag, self.id);
+			return;
+		}
+		// Transfer leadership to third party.
+		info!("{} {} [term {}] starts to transfer leadership to {}", self.tag, self.id, self.term, lead_transferee);
+		// Transfer leadership should be finished in one electionTimeout, so reset r.electionElapsed.
+		self.election_elapsed = 0;
+		self.lead_transferee = lead_transferee;
+		if pr.matched == self.raft_log.last_index() {
+			self.send_timeout_now(lead_transferee);
+			info!(
+				"{} {} sends MsgTimeoutNow to {} immediately as {} already has up-to-date log",
+				self.tag,
+				self.id,
+				lead_transferee,
+				lead_transferee,
+			);
+		} else {
+			self.send_append(lead_transferee, pr);
+		}
 	}
 
 	fn handle_unreachable(&mut self, pr: &mut Progress, msg: &Message) {
