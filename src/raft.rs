@@ -449,8 +449,14 @@ impl<T: Storage> Raft<T> {
 		self.lead_transferee = NONE;
 	}
 
-	fn nodes(&self) -> Vec<u64> {
+	pub fn nodes(&self) -> Vec<u64> {
 		let mut nodes: Vec<u64> = self.prs.iter().map(|(&id, _)| id).collect();
+		nodes.sort();
+		nodes
+	}
+
+	pub fn learner_nodes(&self) -> Vec<u64> {
+		let mut nodes: Vec<u64> = self.learner_prs.iter().map(|(&id, _)| id).collect();
 		nodes.sort();
 		nodes
 	}
@@ -488,7 +494,32 @@ impl<T: Storage> Raft<T> {
 		self.get_mut_progress(id).unwrap().recent_active = true;
 	}
 
-	pub fn promote_learner(&mut self, id: u64) {
+	pub fn remove_node(&mut self, id: u64) {
+		self.del_progress(id);
+
+		// do not try to commit or abort transferring if there is no nodes in the cluster.
+		if self.prs.is_empty() && self.learner_prs.is_empty() {
+			return;
+		}
+
+		// The quorum size is now smaller, so see if any pending entries can
+		// be committed.
+		if self.maybe_commit() {
+			self.bcast_append();
+		}
+
+		// If the removed node is the leadTransferee, then abort the leadership transferring.
+		if self.state == StateType::Leader &&  self.lead_transferee == id {
+			self.abort_leader_transfer();
+		}
+	}
+
+	fn del_progress(&mut self, id: u64) {
+		self.prs.remove(&id);
+		self.learner_prs.remove(&id);
+	}
+
+	fn promote_learner(&mut self, id: u64) {
         if let Some(mut pr) = self.learner_prs.remove(&id) {
             pr.is_learner = false;
             self.prs.insert(id, pr);
@@ -1046,7 +1077,7 @@ impl<T: Storage> Raft<T> {
 				}
 				let mut prs = self.take_prs();
 				let mut learner_prs = self.take_learner_prs();
-				if let Some(pr) = prs.get_mut(&msg.get_from()).or(learner_prs.get_mut(&msg.get_from())) {
+				if let Some(pr) = prs.get_mut(&msg.get_from()).or_else(|| learner_prs.get_mut(&msg.get_from())) {
 					match msg.get_msg_type() {
 						MessageType::MsgAppResp => {
 							self.handle_append_resp(pr, &msg);

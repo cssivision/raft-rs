@@ -69,7 +69,7 @@ impl ReadOnly {
             return;
         }
         let ris = ReadIndexStatus{
-            index: index,
+            index,
             req: msg,
             acks: HashSet::new(),
         };

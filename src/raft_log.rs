@@ -6,7 +6,7 @@ use raftpb::{Entry, Snapshot};
 use errors::{Error, Result, StorageError};
 use util::{limit_size, NO_LIMIT};
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct RaftLog<T: Storage> {
     /// storage contains all stable entries since the last snapshot.
     pub storage: T,
@@ -271,7 +271,7 @@ impl<T: Storage> RaftLog<T> {
     fn find_conflict(&self, ents: &[Entry]) -> u64 {
         for e in ents {
             if !self.match_term(e.get_index(), e.get_term()) {
-                if e.get_index() <= self.last_index() {
+               if e.get_index() <= self.last_index() {
                     info!(
                         "{} found conflict at index {} [existing term: {}, conflicting term: {}]",
                         self.tag,
@@ -338,6 +338,11 @@ impl<T: Storage> RaftLog<T> {
             }
         }
         vec![]
+    }
+
+    pub fn has_next_ents(&self) -> bool {
+        let off = cmp::max(self.applied+1, self.first_index());
+        self.committed+1 > off
     }
 
     pub fn stable_to(&self, index: u64, term: u64) {

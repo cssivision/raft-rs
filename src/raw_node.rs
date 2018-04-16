@@ -1,13 +1,20 @@
 use errors::Result;
 use raft::{Raft, Config, NONE, StateType, Peer};
 use storage::{Storage};
-use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType, Message, MessageType, Snapshot};
+use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType, Message, 
+    MessageType, Snapshot, ConfState};
 use read_only::ReadState;
 
 use protobuf::{self, RepeatedField};
 
-// SoftState provides state that is useful for logging and debugging.
-// The state is volatile and does not need to be persisted to the WAL.
+#[derive(PartialEq, Debug)]
+pub enum SnapshotStatus {
+    Finish,
+    Failure,
+}
+
+/// SoftState provides state that is useful for logging and debugging.
+/// The state is volatile and does not need to be persisted to the WAL.
 #[derive(Default, PartialEq, Debug)]
 pub struct SoftState {
     pub lead: u64,
@@ -20,47 +27,47 @@ pub struct RawNode<T: Storage> {
     pub pre_hard_state: HardState,
 }
 
-// Ready encapsulates the entries and messages that are ready to read,
-// be saved to stable storage, committed or sent to other peers.
-// All fields in Ready are read-only.
+/// Ready encapsulates the entries and messages that are ready to read,
+/// be saved to stable storage, committed or sent to other peers.
+/// All fields in Ready are read-only.
 #[derive(Debug, Default)]
 pub struct Ready {
-    // The current volatile state of a Node.
-	// SoftState will be nil if there is no update.
-	// It is not required to consume or store SoftState.
+    /// The current volatile state of a Node.
+	/// SoftState will be nil if there is no update.
+	/// It is not required to consume or store SoftState.
     pub soft_state: Option<SoftState>,
 
-    // The current state of a Node to be saved to stable storage BEFORE
-	// Messages are sent.
-	// HardState will be equal to empty state if there is no update.
+    /// The current state of a Node to be saved to stable storage BEFORE
+	/// Messages are sent.
+	/// HardState will be equal to empty state if there is no update.
     pub hard_state: HardState,
 
-    // read_states can be used for node to serve linearizable read requests locally
-	// when its applied index is greater than the index in ReadState.
-	// Note that the readState will be returned when raft receives msgReadIndex.
-	// The returned is only valid for the request that requested to read.
+    /// read_states can be used for node to serve linearizable read requests locally
+	/// when its applied index is greater than the index in ReadState.
+	/// Note that the readState will be returned when raft receives msgReadIndex.
+	/// The returned is only valid for the request that requested to read.
     pub read_states: Vec<ReadState>,
 
-    // entries specifies entries to be saved to stable storage BEFORE
-	// Messages are sent.
+    /// entries specifies entries to be saved to stable storage BEFORE
+	/// Messages are sent.
     pub entries: Vec<Entry>,
 
-    // Snapshot specifies the snapshot to be saved to stable storage.
+    /// snapshot specifies the snapshot to be saved to stable storage.
     pub snapshot: Snapshot,
 
-    // committed_entries specifies entries to be committed to a
-	// store/state-machine. These have previously been committed to stable
-	// store.
+    /// committed_entries specifies entries to be committed to a
+	/// store/state-machine. These have previously been committed to stable
+	/// store.
     pub committed_entries: Vec<Entry>,
 
-    // messages specifies outbound messages to be sent AFTER Entries are
-	// committed to stable storage.
-	// If it contains a MsgSnap message, the application MUST report back to raft
-	// when the snapshot has been received or has failed by calling ReportSnapshot.
+    /// messages specifies outbound messages to be sent AFTER Entries are
+	/// committed to stable storage.
+	/// If it contains a MsgSnap message, the application MUST report back to raft
+	/// when the snapshot has been received or has failed by calling ReportSnapshot.
     pub messages: Vec<Message>,
 
-    // must_sync indicates whether the HardState and Entries must be synchronously
-	// written to disk or if an asynchronous write is permissible.
+    /// must_sync indicates whether the HardState and Entries must be synchronously
+	/// written to disk or if an asynchronous write is permissible.
     pub must_sync: bool,
 }
 
@@ -159,8 +166,8 @@ impl<T: Storage> RawNode<T> {
     }
 
     // ProposeConfChange proposes a config change.
-    pub fn propose_conf_change(&mut self, cc: ConfChange) -> Result<()> {
-        let data = protobuf::Message::write_to_bytes(&cc)?;
+    pub fn propose_conf_change(&mut self, cc: &ConfChange) -> Result<()> {
+        let data = protobuf::Message::write_to_bytes(cc)?;
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgProp);
         let mut e = Entry::new();
@@ -209,5 +216,107 @@ impl<T: Storage> RawNode<T> {
         if !rd.read_states.is_empty() {
             self.raft.read_states = vec![];
         }
+    }
+
+    /// read_index requests a read state. The read state will be set in ready.
+    /// Read State has a read index. Once the application advances further than the read
+    /// index, any linearizable read requests issued before the read request can be
+    /// processed safely. The read state will have the same rctx attached.
+    pub fn read_index(&mut self, rctx: Vec<u8>) {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgReadIndex);
+        let mut e = Entry::new();
+        e.set_data(rctx);
+        m.set_entries(RepeatedField::from_vec(vec![e]));
+        self.raft.step(m).is_ok();
+    }
+
+    // apply_conf_change applies a config change to the local node.
+    pub fn apply_conf_change(&mut self, cc: &ConfChange) -> ConfState {
+        if cc.get_node_id() == NONE {
+            let mut cs = ConfState::new();
+            cs.set_nodes(self.raft.nodes());
+            cs.set_learners(self.raft.learner_nodes());
+            return cs;
+        }
+
+        match cc.get_change_type() {
+            ConfChangeType::ConfChangeAddNode => {
+                self.raft.add_node(cc.get_node_id());
+            }
+            ConfChangeType::ConfChangeAddLearnerNode => {
+                self.raft.add_learner(cc.get_node_id());
+            }
+            ConfChangeType::ConfChangeRemoveNode => {
+                self.raft.remove_node(cc.get_node_id());
+            }
+            ConfChangeType::ConfChangeUpdateNode => {}
+        }
+
+         let mut cs = ConfState::new();
+        cs.set_nodes(self.raft.nodes());
+        cs.set_learners(self.raft.learner_nodes());
+        cs
+    }
+
+    /// Campaign causes this RawNode to transition to candidate state.
+    pub fn campaign(&mut self) -> Result<()> {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgHup);
+        self.raft.step(m)
+    }
+
+    /// HasReady called when RawNode user need to check if any Ready pending.
+    pub fn has_ready(&self) -> bool {
+        if self.raft.soft_state() != self.pre_soft_state {
+            return true;
+        }
+
+        if self.raft.hard_state() != HardState::new() && self.raft.hard_state() != self.pre_hard_state {
+            return true;
+        }
+
+        if self.raft.raft_log.snapshot().is_ok() && self.raft.raft_log.snapshot().unwrap() != Snapshot::new() {
+            return true;
+        }
+
+        if !self.raft.msgs.is_empty() || 
+            !self.raft.raft_log.unstable_entries().is_empty() || 
+            self.raft.raft_log.has_next_ents() {
+            return true;
+        }
+
+        if !self.raft.read_states.is_empty() {
+            return true;
+        }
+
+        false 
+    }
+
+    /// report_unreachable reports the given node is not reachable for the last send.
+    pub fn report_unreachable(&mut self, id: u64) {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgUnreachable);
+        m.set_from(id);
+        self.raft.step(m).is_ok();
+    }
+
+    /// report_snapshot reports the status of the sent snapshot.
+    pub fn report_snapshot(&mut self, id: u64, status: SnapshotStatus) {
+        let rej = status == SnapshotStatus::Failure;
+
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgSnapStatus);
+        m.set_from(id);
+        m.set_reject(rej);
+        self.raft.step(m).is_ok();
+    }
+
+    /// transfer_leader tries to transfer leadership to the given transferee.
+    pub fn transfer_leader(&mut self, transferee: u64) {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgTransferLeader);
+        m.set_from(transferee);
+        self.raft.step(m).is_ok();
     }
 }
