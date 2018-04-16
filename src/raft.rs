@@ -26,6 +26,16 @@ const CAMPAIGN_ELECTION: &[u8] = b"CampaignElection";
 // CAMPAIGN_TRANSFER represents the type of leader transfer.
 const CAMPAIGN_TRANSFER: &[u8] = b"CampaignTransfer";
 
+#[derive(Debug, Default)]
+pub struct Status {
+    pub id: u64,
+    pub hard_state: HardState,
+    pub soft_state: SoftState,
+    pub applied: u64,
+    pub progress: HashMap<u64, Progress>,
+    pub lead_transferee: u64
+}
+
 pub struct Config {
     /// id is the identity of the local raft. ID cannot be 0.
     pub id: u64,
@@ -301,6 +311,31 @@ impl<T: Storage> Raft<T> {
         );
 		r 
     }
+
+	pub fn get_status(&self) -> Status {
+		let mut s = Status{
+			id: self.id,
+			lead_transferee: self.lead_transferee,
+			..Default::default()
+		};
+
+		s.hard_state = self.hard_state();
+		s.soft_state = self.soft_state();
+		s.applied = self.raft_log.applied;
+
+		if s.soft_state.raft_state == StateType::Leader {
+			s.progress = HashMap::new();
+			for (&id, p) in &self.prs {
+				s.progress.insert(id, p.clone());
+			}
+
+			for (&id, p) in &self.learner_prs {
+				s.progress.insert(id, p.clone());
+			}
+		}
+
+		s 
+	}
 
 	pub fn load_state(&mut self, state: &HardState) {
 		if state.commit < self.raft_log.committed || state.commit > self.raft_log.last_index() {

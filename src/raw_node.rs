@@ -1,9 +1,10 @@
 use errors::Result;
-use raft::{Raft, Config, NONE, StateType, Peer};
+use raft::{Raft, Config, NONE, StateType, Peer, Status};
 use storage::{Storage};
 use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType, Message, 
     MessageType, Snapshot, ConfState};
 use read_only::ReadState;
+use progress::Progress;
 
 use protobuf::{self, RepeatedField};
 
@@ -318,5 +319,10 @@ impl<T: Storage> RawNode<T> {
         m.set_msg_type(MessageType::MsgTransferLeader);
         m.set_from(transferee);
         self.raft.step(m).is_ok();
+    }
+
+    /// Status returns the current status of the given group.
+    pub fn status(&self) -> Status {
+        self.raft.get_status()
     }
 }
