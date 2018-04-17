@@ -567,6 +567,10 @@ impl<T: Storage> Raft<T> {
 		self.prs.get_mut(&id).or(self.learner_prs.get_mut(&id))
 	}
 
+	pub fn get_progress(&self, id: u64) -> Option<&Progress> {
+		self.prs.get(&id).or_else(|| self.learner_prs.get(&id))
+	}
+
 	fn set_progress(&mut self, id: u64, matched: u64, next: u64, is_learner: bool) {
 		if !is_learner {
 			self.learner_prs.remove(&id);

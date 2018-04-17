@@ -1,10 +1,11 @@
-use errors::Result;
+use errors::{Error, Result};
 use raft::{Raft, Config, NONE, StateType, Peer, Status};
 use storage::{Storage};
 use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType, Message, 
     MessageType, Snapshot, ConfState};
 use read_only::ReadState;
 use progress::Progress;
+use util::{is_local_msg, is_response_msg};
 
 use protobuf::{self, RepeatedField};
 
@@ -178,6 +179,18 @@ impl<T: Storage> RawNode<T> {
         self.raft.step(m)
     }
 
+    pub fn step(&mut self, msg: Message) -> Result<()> {
+        if is_local_msg(msg.get_msg_type()) {
+            return Err(Error::StepLocalMsg);
+        }
+
+        if is_response_msg(msg.get_msg_type()) && self.raft.get_progress(msg.get_from()).is_none() {
+            return Err(Error::StepPeerNotFound)
+        }
+
+        self.raft.step(msg)
+    }
+
     pub fn ready(&self) -> Ready {
         Ready::new(&self.raft, &self.pre_soft_state, &self.pre_hard_state)
     }
@@ -321,7 +334,7 @@ impl<T: Storage> RawNode<T> {
         self.raft.step(m).is_ok();
     }
 
-    /// Status returns the current status of the given group.
+    /// status returns the current status of the given group.
     pub fn status(&self) -> Status {
         self.raft.get_status()
     }

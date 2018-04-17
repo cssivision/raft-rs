@@ -41,3 +41,19 @@ pub fn vote_msg_resp_type(t: MessageType) -> MessageType {
         _ => panic!("not a vote message: {:?}", t)
     }
 }
+
+pub fn is_local_msg(msgt: MessageType) -> bool {
+    msgt == MessageType::MsgHup || 
+    msgt == MessageType::MsgBeat || 
+    msgt == MessageType::MsgUnreachable ||
+    msgt == MessageType::MsgSnapStatus ||
+    msgt == MessageType::MsgCheckQuorum
+}
+
+pub fn is_response_msg(msgt: MessageType) -> bool {
+    msgt == MessageType::MsgAppResp ||
+    msgt == MessageType::MsgVoteResp ||
+    msgt == MessageType::MsgHeartbeatResp ||
+    msgt == MessageType::MsgPreVoteResp ||
+    msgt == MessageType::MsgUnreachable
+}
