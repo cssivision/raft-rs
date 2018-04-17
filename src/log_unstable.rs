@@ -129,3 +129,52 @@ impl Unstable {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use raftpb::{Entry, Snapshot, SnapshotMetadata};
+    use log_unstable::Unstable;
+
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::new();
+        e.set_term(term);
+        e.set_index(index);
+        e
+    }
+
+    fn new_snapshot(index: u64, term: u64) -> Snapshot {
+        let mut snap = Snapshot::new();
+        let mut meta = SnapshotMetadata::new();
+        meta.set_index(index);
+        meta.set_term(term);
+        snap.set_metadata(meta);
+        snap
+    }
+
+    #[test]
+    fn test_maybe_first_index() {
+        // entry, offset, snap, wok, windex,
+        let tests = vec![
+            // no snapshot
+            (Some(new_entry(5, 1)), 5, None, false, 0),
+            (None, 0, None, false, 0),
+            // has snapshot
+            (Some(new_entry(5, 1)), 5, Some(new_snapshot(4, 1)), true, 5),
+            (None, 5, Some(new_snapshot(4, 1)), true, 5),
+        ];
+
+        for (entries, offset, snapshot, wok, windex) in tests {
+            let u = Unstable {
+                entries: entries.map_or(vec![], |entry| vec![entry]),
+                offset: offset,
+                snapshot: snapshot,
+                ..Default::default()
+            };
+            let index = u.maybe_first_index();
+            match index {
+                None => assert!(!wok),
+                Some(index) => assert_eq!(index, windex),
+            }
+        }
+    }
+}

@@ -11,7 +11,7 @@
 
 /// A progress is in one of the three state: `probe`, `replicate`, `snapshot`. 
 
-/// ```
+/// ```ignore
 ///                             +--------------------------------------------------------+          
 ///                             |                  send snapshot                         |          
 ///                             |                                                        |          

@@ -185,7 +185,7 @@ impl<T: Storage> RawNode<T> {
         }
 
         if is_response_msg(msg.get_msg_type()) && self.raft.get_progress(msg.get_from()).is_none() {
-            return Err(Error::StepPeerNotFound)
+            return Err(Error::StepPeerNotFound);
         }
 
         self.raft.step(msg)
@@ -207,7 +207,7 @@ impl<T: Storage> RawNode<T> {
             self.pre_hard_state = rd.hard_state;
         }
 
-        if self.pre_hard_state.commit != 0 {
+        if self.pre_hard_state.get_commit() != 0 {
             // In most cases, prevHardSt and rd.HardState will be the same
             // because when there are new entries to apply we just sent a
             // HardState with an updated Commit value. However, on initial
@@ -228,7 +228,7 @@ impl<T: Storage> RawNode<T> {
             self.raft.raft_log.stable_snap_to(rd.snapshot.get_metadata().get_index());
         }
         if !rd.read_states.is_empty() {
-            self.raft.read_states = vec![];
+            self.raft.read_states.clear();
         }
     }
 
