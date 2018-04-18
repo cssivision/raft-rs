@@ -345,7 +345,7 @@ impl<T: Storage> RaftLog<T> {
         self.committed+1 > off
     }
 
-    pub fn stable_to(&self, index: u64, term: u64) {
+    pub fn stable_to(&mut self, index: u64, term: u64) {
         self.unstable.stable_to(index, term);
     }
 
