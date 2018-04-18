@@ -695,7 +695,9 @@ impl<T: Storage> Raft<T> {
 						msg.get_index(), 
 						self.term, 
 						self.election_timeout-self.election_elapsed
-					)
+					);
+					
+					return Ok(());
 				}
 			}
 
