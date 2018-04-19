@@ -1,4 +1,4 @@
-extern crate raft_rs as raft;
+extern crate craft as raft;
 
 fn main() {
 }
