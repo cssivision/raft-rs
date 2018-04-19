@@ -752,17 +752,21 @@ impl<T: Storage> Raft<T> {
 				m.set_msg_type(MessageType::MsgAppResp);
 				self.send(m);
 			} else if msg.get_msg_type() == MessageType::MsgPreVote {
+				// Before Pre-Vote enable, there may have candidate with higher term,
+				// but less log. After update to Pre-Vote, the cluster may deadlock if
+				// we drop messages with a lower term.
+				
 				info!(
 					"{} {} [logterm: {}, index: {}, vote: {}] rejected {:?} from {} [logterm: {}, index: {}] at term {}",
 					self.tag,
 					self.id, 
-					self.raft_log.last_term(), 
-					self.raft_log.last_index(), 
-					self.vote, 
-					msg.get_msg_type(), 
-					msg.get_from(), 
-					msg.get_log_term(), 
-					msg.get_index(), 
+					self.raft_log.last_term(),
+					self.raft_log.last_index(),
+					self.vote,
+					msg.get_msg_type(),
+					msg.get_from(),
+					msg.get_log_term(),
+					msg.get_index(),
 					self.term,
 				);
 				let mut m = Message::new();
@@ -772,6 +776,7 @@ impl<T: Storage> Raft<T> {
 				m.set_reject(true);
 				self.send(m);
 			} else {
+				// ignore other cases
 				info!(
 					"{} {} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
 					self.tag,
