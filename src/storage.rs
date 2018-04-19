@@ -1,8 +1,8 @@
-use std::u64;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::u64;
 
+use errors::{Error, Result, StorageError};
 use raftpb::{ConfState, Entry, HardState, Snapshot};
-use errors::{Result, Error, StorageError};
 use util::limit_size;
 
 pub trait Storage {
@@ -91,16 +91,20 @@ impl MemStorageCore {
         }
 
         if compact_index > self.inner_last_index() {
-            panic!("compact {} is out of bound lastindex({})", compact_index, self.inner_last_index());
+            panic!(
+                "compact {} is out of bound lastindex({})",
+                compact_index,
+                self.inner_last_index()
+            );
         }
 
         let i = (compact_index - offset) as usize;
         let entries = self.entries.drain(i..).collect();
         self.entries = entries;
         Ok(())
-    } 
+    }
 
-    pub fn append(&mut self, ents: &[Entry]) -> Result<()> { 
+    pub fn append(&mut self, ents: &[Entry]) -> Result<()> {
         if ents.is_empty() {
             return Ok(());
         }
@@ -115,7 +119,7 @@ impl MemStorageCore {
 
         // truncate compacted entries
         let te: &[Entry] = if first > ents[0].get_index() {
-            let t = (first-ents[0].get_index()) as usize;
+            let t = (first - ents[0].get_index()) as usize;
             &ents[t..]
         } else {
             ents
@@ -142,9 +146,9 @@ impl MemStorageCore {
     }
 
     pub fn create_snapshot(
-        &mut self, 
-        index: u64, 
-        cs: Option<ConfState>, 
+        &mut self,
+        index: u64,
+        cs: Option<ConfState>,
         data: Vec<u8>,
     ) -> Result<&Snapshot> {
         if index <= self.snapshot.get_metadata().get_index() {
@@ -161,7 +165,9 @@ impl MemStorageCore {
         }
 
         self.snapshot.mut_metadata().set_index(index);
-        self.snapshot.mut_metadata().set_term(self.entries[(index - offset) as usize].get_term());
+        self.snapshot
+            .mut_metadata()
+            .set_term(self.entries[(index - offset) as usize].get_term());
 
         if let Some(cs) = cs {
             self.snapshot.mut_metadata().set_conf_state(cs);
@@ -181,7 +187,7 @@ pub struct MemStorage {
 
 impl MemStorage {
     pub fn new() -> MemStorage {
-        MemStorage{
+        MemStorage {
             ..Default::default()
         }
     }
@@ -194,7 +200,7 @@ impl MemStorage {
         self.core.write().unwrap()
     }
 
-     /// set_hardstate saves the current HardState.
+    /// set_hardstate saves the current HardState.
     pub fn set_hard_state(&mut self, hs: HardState) {
         self.write_lock().set_hard_state(hs);
     }
@@ -211,7 +217,10 @@ impl MemStorage {
 impl Storage for MemStorage {
     fn initial_state(&self) -> Result<(HardState, ConfState)> {
         let core = self.read_lock();
-        Ok((core.hard_state.clone(), core.snapshot.get_metadata().get_conf_state().clone()))
+        Ok((
+            core.hard_state.clone(),
+            core.snapshot.get_metadata().get_conf_state().clone(),
+        ))
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
@@ -222,7 +231,11 @@ impl Storage for MemStorage {
         }
 
         if high > core.inner_last_index() + 1 {
-            panic!("entries' hight({}) is out of bound lastindex({})", high, core.inner_last_index() + 1);
+            panic!(
+                "entries' hight({}) is out of bound lastindex({})",
+                high,
+                core.inner_last_index() + 1
+            );
         }
 
         if core.entries.len() == 1 {
@@ -254,11 +267,11 @@ impl Storage for MemStorage {
         if index <= offset {
             return Err(Error::Storage(StorageError::Compacted));
         }
-        if index-offset >= core.entries.len() as u64 {
+        if index - offset >= core.entries.len() as u64 {
             return Err(Error::Storage(StorageError::Unavailable));
         }
 
-        Ok(core.entries[(index-offset) as usize].get_term())
+        Ok(core.entries[(index - offset) as usize].get_term())
     }
 
     fn snapshot(&self) -> Result<Snapshot> {

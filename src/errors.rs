@@ -1,5 +1,5 @@
-use std::{cmp, io, result};
 use std::error;
+use std::{cmp, io, result};
 
 use protobuf::ProtobufError;
 
@@ -82,7 +82,10 @@ impl cmp::PartialEq for StorageError {
             (&StorageError::Compacted, &StorageError::Compacted) => true,
             (&StorageError::Unavailable, &StorageError::Unavailable) => true,
             (&StorageError::SnapshotOutOfDate, &StorageError::SnapshotOutOfDate) => true,
-            (&StorageError::SnapshotTemporarilyUnavailable, &StorageError::SnapshotTemporarilyUnavailable) => true,
+            (
+                &StorageError::SnapshotTemporarilyUnavailable,
+                &StorageError::SnapshotTemporarilyUnavailable,
+            ) => true,
             _ => false,
         }
     }

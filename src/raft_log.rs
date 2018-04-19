@@ -1,9 +1,9 @@
 use std::cmp;
 
-use storage::Storage;
+use errors::{Error, Result, StorageError};
 use log_unstable::Unstable;
 use raftpb::{Entry, Snapshot};
-use errors::{Error, Result, StorageError};
+use storage::Storage;
 use util::{limit_size, NO_LIMIT};
 
 #[derive(Debug, Default)]
@@ -12,17 +12,17 @@ pub struct RaftLog<T: Storage> {
     pub storage: T,
 
     /// unstable contains all unstable entries and snapshot.
-	/// they will be saved into storage.
+    /// they will be saved into storage.
     pub unstable: Unstable,
 
     /// committed is the highest log position that is known to be in
-	/// stable storage on a quorum of nodes.
-	pub committed: u64,
+    /// stable storage on a quorum of nodes.
+    pub committed: u64,
 
     /// applied is the highest log position that the application has
-	/// been instructed to apply to its state machine.
-	/// Invariant: applied <= committed
-	pub applied: u64,
+    /// been instructed to apply to its state machine.
+    /// Invariant: applied <= committed
+    pub applied: u64,
 
     /// tag only used for logger.
     tag: String,
@@ -43,12 +43,12 @@ impl<T: Storage> ToString for RaftLog<T> {
 impl<T: Storage> RaftLog<T> {
     pub fn new(storage: T, tag: String) -> RaftLog<T> {
         let first_index = storage.first_index().unwrap();
-	    let last_index = storage.last_index().unwrap();
-        RaftLog{
+        let last_index = storage.last_index().unwrap();
+        RaftLog {
             storage,
             committed: first_index - 1,
             applied: first_index - 1,
-            unstable: Unstable::new(last_index+1, tag.clone()),
+            unstable: Unstable::new(last_index + 1, tag.clone()),
             tag,
         }
     }
@@ -60,7 +60,7 @@ impl<T: Storage> RaftLog<T> {
 
         match self.storage.last_index() {
             Ok(last_index) => last_index,
-            Err(err) => panic!(err)
+            Err(err) => panic!(err),
         }
     }
 
@@ -73,15 +73,13 @@ impl<T: Storage> RaftLog<T> {
 
     pub fn applied_to(&mut self, i: u64) {
         if i == 0 {
-            return 
+            return;
         }
 
         if i > self.committed || i < self.applied {
             panic!(
-                "applied({}) is out of range [prev applied({}), committed({})]", 
-                i,
-                self.applied, 
-                self.committed,
+                "applied({}) is out of range [prev applied({}), committed({})]",
+                i, self.applied, self.committed,
             );
         }
 
@@ -91,7 +89,7 @@ impl<T: Storage> RaftLog<T> {
     pub fn last_term(&self) -> u64 {
         match self.term(self.last_index()) {
             Ok(t) => t,
-            Err(e) => panic!("unexpected error when getting the last term ({})", e)
+            Err(e) => panic!("unexpected error when getting the last term ({})", e),
         }
     }
 
@@ -108,8 +106,9 @@ impl<T: Storage> RaftLog<T> {
             Ok(t) => Ok(t),
             Err(e) => {
                 match e {
-                    Error::Storage(StorageError::Compacted) | Error::Storage(StorageError::Unavailable) => {},
-                    _ => panic!("unexpected error: {:?}", e)
+                    Error::Storage(StorageError::Compacted)
+                    | Error::Storage(StorageError::Unavailable) => {}
+                    _ => panic!("unexpected error: {:?}", e),
                 }
                 Err(e)
             }
@@ -130,14 +129,19 @@ impl<T: Storage> RaftLog<T> {
         }
         let after = ents[0].get_index() - 1;
         if after < self.committed {
-            panic!("after({}) is out of range [committed({})]", after, self.committed);
+            panic!(
+                "after({}) is out of range [committed({})]",
+                after, self.committed
+            );
         }
         self.unstable.truncate_and_append(ents);
         self.last_index()
-    } 
+    }
 
-    pub fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool { 
-        if max_index > self.committed && self.zero_term_on_err_compacted(self.term(max_index)) == term {
+    pub fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
+        if max_index > self.committed
+            && self.zero_term_on_err_compacted(self.term(max_index)) == term
+        {
             self.commit_to(max_index);
             return true;
         }
@@ -160,14 +164,10 @@ impl<T: Storage> RaftLog<T> {
     pub fn zero_term_on_err_compacted(&self, t: Result<u64>) -> u64 {
         match t {
             Ok(t) => t,
-            Err(e) => {
-                match e {
-                    Error::Storage(StorageError::Compacted) => {
-                        0
-                    },
-                    e => panic!("unexpected error ({})", e)
-                }
-            }
+            Err(e) => match e {
+                Error::Storage(StorageError::Compacted) => 0,
+                e => panic!("unexpected error ({})", e),
+            },
         }
     }
 
@@ -185,7 +185,7 @@ impl<T: Storage> RaftLog<T> {
         if low < fi || hight > hi {
             panic!("slice[{},{}) out of bound [{},{}]", low, hight, fi, hi);
         }
-        
+
         Ok(())
     }
 
@@ -200,20 +200,21 @@ impl<T: Storage> RaftLog<T> {
 
         let mut ents = Vec::new();
         if lo < self.unstable.offset {
-            let sorted_ents = match self.storage.entries(lo, cmp::min(hi, self.unstable.offset), max_size) {
-                Ok(ents) => ents,
-                Err(e) => {
-                    match e {
+            let sorted_ents =
+                match self.storage
+                    .entries(lo, cmp::min(hi, self.unstable.offset), max_size)
+                {
+                    Ok(ents) => ents,
+                    Err(e) => match e {
                         Error::Storage(StorageError::Compacted) => {
                             return Err(e);
-                        },
+                        }
                         Error::Storage(StorageError::Unavailable) => {
                             panic!("entries[{}:{}) is unavailable from storage", lo, hi);
-                        },
-                        _ => panic!(e)
-                    }
-                }
-            };
+                        }
+                        _ => panic!(e),
+                    },
+                };
 
             // check if has reached the size limitation
             if (sorted_ents.len() as u64) < cmp::min(hi, self.unstable.offset) - lo {
@@ -221,7 +222,7 @@ impl<T: Storage> RaftLog<T> {
             }
             ents.extend_from_slice(&sorted_ents);
         }
-        
+
         if hi > self.unstable.offset {
             let unstable = self.unstable.slice(cmp::max(self.unstable.offset, lo), hi);
             ents.extend_from_slice(unstable);
@@ -235,7 +236,7 @@ impl<T: Storage> RaftLog<T> {
         if i > self.last_index() {
             Ok(vec![])
         } else {
-            self.slice(i, self.last_index()+1, max_size)
+            self.slice(i, self.last_index() + 1, max_size)
         }
     }
 
@@ -271,12 +272,12 @@ impl<T: Storage> RaftLog<T> {
     fn find_conflict(&self, ents: &[Entry]) -> u64 {
         for e in ents {
             if !self.match_term(e.get_index(), e.get_term()) {
-               if e.get_index() <= self.last_index() {
+                if e.get_index() <= self.last_index() {
                     info!(
                         "{} found conflict at index {} [existing term: {}, conflicting term: {}]",
                         self.tag,
-                        e.get_index(), 
-                        self.zero_term_on_err_compacted(self.term(e.get_index())), 
+                        e.get_index(),
+                        self.zero_term_on_err_compacted(self.term(e.get_index())),
                         e.get_term(),
                     );
                     return e.get_index();
@@ -288,29 +289,38 @@ impl<T: Storage> RaftLog<T> {
 
     // maybe_append returns None if the entries cannot be appended. Otherwise,
     // it returns Some(last index of new entries).
-    pub fn maybe_append(&mut self, index: u64, log_term: u64, committed: u64, ents: &[Entry]) -> Option<u64> {
+    pub fn maybe_append(
+        &mut self,
+        index: u64,
+        log_term: u64,
+        committed: u64,
+        ents: &[Entry],
+    ) -> Option<u64> {
         if self.match_term(index, log_term) {
             let last_new_index = index + ents.len() as u64;
             let ci = self.find_conflict(ents);
             if ci == 0 {
-                // no conflict, existing entries contain "ents". 
+                // no conflict, existing entries contain "ents".
             } else if ci <= self.committed {
-                panic!("entry {} conflict with committed entry [committed({})]", ci, self.committed);
+                panic!(
+                    "entry {} conflict with committed entry [committed({})]",
+                    ci, self.committed
+                );
             } else {
-                self.append(&ents[(ci-index-1) as usize..]);
+                self.append(&ents[(ci - index - 1) as usize..]);
             }
             self.commit_to(cmp::min(committed, last_new_index));
             return Some(last_new_index);
         }
-        None 
+        None
     }
 
     pub fn restore(&mut self, s: Snapshot) {
         info!(
-            "{} log [{}] starts to restore snapshot [index: {}, term: {}]", 
+            "{} log [{}] starts to restore snapshot [index: {}, term: {}]",
             self.tag,
-            self.to_string(), 
-            s.get_metadata().get_index(), 
+            self.to_string(),
+            s.get_metadata().get_index(),
             s.get_metadata().get_term()
         );
 
@@ -330,19 +340,19 @@ impl<T: Storage> RaftLog<T> {
     }
 
     pub fn next_ents(&self) -> Vec<Entry> {
-        let off = cmp::max(self.applied+1, self.first_index());
-        if self.committed+1 > off {
-            match self.slice(off, self.committed+1, NO_LIMIT) {
+        let off = cmp::max(self.applied + 1, self.first_index());
+        if self.committed + 1 > off {
+            match self.slice(off, self.committed + 1, NO_LIMIT) {
                 Ok(ents) => return ents,
-                Err(e) => panic!("unexpected error when getting unapplied entries ({})", e)
+                Err(e) => panic!("unexpected error when getting unapplied entries ({})", e),
             }
         }
         vec![]
     }
 
     pub fn has_next_ents(&self) -> bool {
-        let off = cmp::max(self.applied+1, self.first_index());
-        self.committed+1 > off
+        let off = cmp::max(self.applied + 1, self.first_index());
+        self.committed + 1 > off
     }
 
     pub fn stable_to(&mut self, index: u64, term: u64) {
@@ -352,4 +362,10 @@ impl<T: Storage> RaftLog<T> {
     pub fn stable_snap_to(&mut self, index: u64) {
         self.unstable.stable_snap_to(index);
     }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_find_conflict() {}
 }

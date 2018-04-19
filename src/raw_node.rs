@@ -1,10 +1,10 @@
 use errors::{Error, Result};
-use raft::{Raft, Config, NONE, StateType, Peer, Status};
-use storage::{Storage};
-use raftpb::{HardState, Entry, ConfChange, ConfChangeType, EntryType, Message, 
-    MessageType, Snapshot, ConfState};
-use read_only::ReadState;
 use progress::Progress;
+use raft::{Config, Peer, Raft, StateType, Status, NONE};
+use raftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState, Message,
+             MessageType, Snapshot};
+use read_only::ReadState;
+use storage::Storage;
 use util::{is_local_msg, is_response_msg};
 
 use protobuf::{self, RepeatedField};
@@ -35,47 +35,51 @@ pub struct RawNode<T: Storage> {
 #[derive(Debug, Default)]
 pub struct Ready {
     /// The current volatile state of a Node.
-	/// SoftState will be nil if there is no update.
-	/// It is not required to consume or store SoftState.
+    /// SoftState will be nil if there is no update.
+    /// It is not required to consume or store SoftState.
     pub soft_state: Option<SoftState>,
 
     /// The current state of a Node to be saved to stable storage BEFORE
-	/// Messages are sent.
-	/// HardState will be equal to empty state if there is no update.
+    /// Messages are sent.
+    /// HardState will be equal to empty state if there is no update.
     pub hard_state: HardState,
 
     /// read_states can be used for node to serve linearizable read requests locally
-	/// when its applied index is greater than the index in ReadState.
-	/// Note that the readState will be returned when raft receives msgReadIndex.
-	/// The returned is only valid for the request that requested to read.
+    /// when its applied index is greater than the index in ReadState.
+    /// Note that the readState will be returned when raft receives msgReadIndex.
+    /// The returned is only valid for the request that requested to read.
     pub read_states: Vec<ReadState>,
 
     /// entries specifies entries to be saved to stable storage BEFORE
-	/// Messages are sent.
+    /// Messages are sent.
     pub entries: Vec<Entry>,
 
     /// snapshot specifies the snapshot to be saved to stable storage.
     pub snapshot: Snapshot,
 
     /// committed_entries specifies entries to be committed to a
-	/// store/state-machine. These have previously been committed to stable
-	/// store.
+    /// store/state-machine. These have previously been committed to stable
+    /// store.
     pub committed_entries: Vec<Entry>,
 
     /// messages specifies outbound messages to be sent AFTER Entries are
-	/// committed to stable storage.
-	/// If it contains a MsgSnap message, the application MUST report back to raft
-	/// when the snapshot has been received or has failed by calling ReportSnapshot.
+    /// committed to stable storage.
+    /// If it contains a MsgSnap message, the application MUST report back to raft
+    /// when the snapshot has been received or has failed by calling ReportSnapshot.
     pub messages: Vec<Message>,
 
     /// must_sync indicates whether the HardState and Entries must be synchronously
-	/// written to disk or if an asynchronous write is permissible.
+    /// written to disk or if an asynchronous write is permissible.
     pub must_sync: bool,
 }
 
 impl Ready {
-    fn new<T: Storage>(r: &Raft<T>, prev_soft_state: &SoftState, prev_hard_state: &HardState) -> Ready {
-        let mut rd = Ready{
+    fn new<T: Storage>(
+        r: &Raft<T>,
+        prev_soft_state: &SoftState,
+        prev_hard_state: &HardState,
+    ) -> Ready {
+        let mut rd = Ready {
             entries: r.raft_log.unstable_entries(),
             committed_entries: r.raft_log.next_ents(),
             messages: r.msgs.clone(),
@@ -96,10 +100,10 @@ impl Ready {
             rd.read_states = r.read_states.clone();
         }
 
-        rd.must_sync = !rd.entries.is_empty() 
-            || rd.hard_state.get_vote() != prev_hard_state.get_vote() 
+        rd.must_sync = !rd.entries.is_empty()
+            || rd.hard_state.get_vote() != prev_hard_state.get_vote()
             || rd.hard_state.get_term() != prev_hard_state.get_term();
-        rd 
+        rd
     }
 }
 
@@ -109,16 +113,16 @@ impl<T: Storage> RawNode<T> {
             panic!("config id must not be zero");
         }
         let r = Raft::new(c, storage);
-        let mut rn = RawNode{
+        let mut rn = RawNode {
             raft: r,
             pre_soft_state: Default::default(),
             pre_hard_state: Default::default(),
         };
 
         let last_index = rn.raft.raft_log.get_storage().last_index().unwrap();
-        
+
         // If the log is empty, this is a new RawNode; otherwise it's
-	    // restoring an existing RawNode.
+        // restoring an existing RawNode.
         if last_index == 0 {
             rn.raft.become_follower(1, NONE);
             let mut ents: Vec<Entry> = Vec::with_capacity(peers.len());
@@ -127,12 +131,13 @@ impl<T: Storage> RawNode<T> {
                 cc.set_change_type(ConfChangeType::ConfChangeAddNode);
                 cc.set_node_id(peer.id);
                 cc.set_context(peer.context.to_vec());
-                let data = protobuf::Message::write_to_bytes(&cc).expect("unexpected marshal error");
+                let data =
+                    protobuf::Message::write_to_bytes(&cc).expect("unexpected marshal error");
                 let mut ent = Entry::new();
                 ent.set_entry_type(EntryType::EntryConfChange);
                 ent.set_term(1);
                 ent.set_data(data);
-                ent.set_index(i as u64+1);
+                ent.set_index(i as u64 + 1);
                 ents.push(ent);
             }
             rn.raft.raft_log.append(&ents);
@@ -221,11 +226,13 @@ impl<T: Storage> RawNode<T> {
         }
 
         if !rd.entries.is_empty() {
-            let e = &rd.entries[rd.entries.len()-1];
+            let e = &rd.entries[rd.entries.len() - 1];
             self.raft.raft_log.stable_to(e.get_index(), e.get_term());
         }
         if rd.snapshot != Snapshot::new() {
-            self.raft.raft_log.stable_snap_to(rd.snapshot.get_metadata().get_index());
+            self.raft
+                .raft_log
+                .stable_snap_to(rd.snapshot.get_metadata().get_index());
         }
         if !rd.read_states.is_empty() {
             self.raft.read_states.clear();
@@ -267,7 +274,7 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::ConfChangeUpdateNode => {}
         }
 
-         let mut cs = ConfState::new();
+        let mut cs = ConfState::new();
         cs.set_nodes(self.raft.nodes());
         cs.set_learners(self.raft.learner_nodes());
         cs
@@ -286,17 +293,21 @@ impl<T: Storage> RawNode<T> {
             return true;
         }
 
-        if self.raft.hard_state() != HardState::new() && self.raft.hard_state() != self.pre_hard_state {
+        if self.raft.hard_state() != HardState::new()
+            && self.raft.hard_state() != self.pre_hard_state
+        {
             return true;
         }
 
-        if self.raft.raft_log.snapshot().is_ok() && self.raft.raft_log.snapshot().unwrap() != Snapshot::new() {
+        if self.raft.raft_log.snapshot().is_ok()
+            && self.raft.raft_log.snapshot().unwrap() != Snapshot::new()
+        {
             return true;
         }
 
-        if !self.raft.msgs.is_empty() || 
-            !self.raft.raft_log.unstable_entries().is_empty() || 
-            self.raft.raft_log.has_next_ents() {
+        if !self.raft.msgs.is_empty() || !self.raft.raft_log.unstable_entries().is_empty()
+            || self.raft.raft_log.has_next_ents()
+        {
             return true;
         }
 
@@ -304,7 +315,7 @@ impl<T: Storage> RawNode<T> {
             return true;
         }
 
-        false 
+        false
     }
 
     /// report_unreachable reports the given node is not reachable for the last send.

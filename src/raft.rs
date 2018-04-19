@@ -366,7 +366,6 @@ impl<T: Storage> Raft<T> {
 		self.get_mut_progress(id).unwrap().maybe_update(li);
 		// Regardless of maybe_commit's return, our caller will call bcast_append.
 		self.maybe_commit();
-		self.bcast_append();
 	}
 
 	// maybe_commit attempts to advance the commit index. Returns true if
@@ -1063,9 +1062,9 @@ impl<T: Storage> Raft<T> {
 							);
 							*e = Entry::new();
                             e.set_entry_type(EntryType::EntryNormal);
+						} else {
+							self.pending_conf_index = self.raft_log.last_index() + i as u64 + 1;
 						}
-					} else {
-						self.pending_conf_index = self.raft_log.last_index() + i as u64 + 1;
 					}
 				}
 				self.append_entry(msg.mut_entries());

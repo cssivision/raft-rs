@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use raftpb::{Message};
+use raftpb::Message;
 
 // ReadState provides state for read only query.
 // It's caller's responsibility to call ReadIndex first before getting
@@ -17,7 +17,7 @@ pub struct ReadState {
 pub enum ReadOnlyOption {
     /// Safe guarantees the linearizability of the read only request by
     /// communicating with the quorum. It is the default and suggested option.
-    Safe, 
+    Safe,
     /// LeaseBased ensures linearizability of the read only request by
     /// relying on the leader lease. It can be affected by clock drift.
     /// If the clock drift is unbounded, leader might keep the lease longer than it
@@ -48,7 +48,7 @@ pub struct ReadOnly {
 
 impl ReadOnly {
     pub(crate) fn new(option: ReadOnlyOption) -> ReadOnly {
-        ReadOnly{
+        ReadOnly {
             option,
             pending_read_index: HashMap::new(),
             read_index_queue: VecDeque::new(),
@@ -68,7 +68,7 @@ impl ReadOnly {
         if self.pending_read_index.contains_key(&ctx) {
             return;
         }
-        let ris = ReadIndexStatus{
+        let ris = ReadIndexStatus {
             index,
             req: msg,
             acks: HashSet::new(),

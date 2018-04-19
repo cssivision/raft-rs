@@ -1,15 +1,15 @@
 /// ## Progress
-/// 
-/// Progress represents a follower’s progress in the view of the leader. Leader maintains 
-/// progresses of all followers, and sends `replication message` to the follower based on 
+///
+/// Progress represents a follower’s progress in the view of the leader. Leader maintains
+/// progresses of all followers, and sends `replication message` to the follower based on
 /// its progress. `replication message` is a `msgApp` with log entries.
-/// 
-/// A progress has two attribute: `match` and `next`. `match` is the index of the highest 
+///
+/// A progress has two attribute: `match` and `next`. `match` is the index of the highest
 /// known matched entry. If leader knows nothing about follower’s replication status, `match`
-///  is set to zero. `next` is the index of the first entry that will be replicated to the 
+///  is set to zero. `next` is the index of the first entry that will be replicated to the
 /// follower. Leader puts entries from `next` to its latest one in next `replication message`.
 
-/// A progress is in one of the three state: `probe`, `replicate`, `snapshot`. 
+/// A progress is in one of the three state: `probe`, `replicate`, `snapshot`.
 
 /// ```ignore
 ///                             +--------------------------------------------------------+          
@@ -42,43 +42,41 @@
 
 /// When the progress of a follower is in `probe` state, leader sends at most one `replication
 /// message` per heartbeat interval. The leader sends `replication message` slowly and probing
-/// the actual progress of the follower. A `msgHeartbeatResp` or a `msgAppResp` with reject might 
+/// the actual progress of the follower. A `msgHeartbeatResp` or a `msgAppResp` with reject might
 /// trigger the sending of the next `replication message`.
 
-/// When the progress of a follower is in `replicate` state, leader sends `replication message`, 
-/// then optimistically increases `next` to the latest entry sent. This is an optimized state for 
+/// When the progress of a follower is in `replicate` state, leader sends `replication message`,
+/// then optimistically increases `next` to the latest entry sent. This is an optimized state for
 /// fast replicating log entries to the follower.
 
 /// When the progress of a follower is in `snapshot` state, leader stops sending any `replication message`.
 
-/// A newly elected leader sets the progresses of all the followers to `probe` state with `match` = 0 
-/// and `next` = last index. The leader slowly (at most once per heartbeat) sends `replication message` 
+/// A newly elected leader sets the progresses of all the followers to `probe` state with `match` = 0
+/// and `next` = last index. The leader slowly (at most once per heartbeat) sends `replication message`
 /// to the follower and probes its progress.
 
-/// A progress changes to `replicate` when the follower replies with a non-rejection `msgAppResp`, 
-/// which implies that it has matched the index sent. At this point, leader starts to stream log 
-/// entries to the follower fast. The progress will fall back to `probe` when the follower replies 
-/// a rejection `msgAppResp` or the link layer reports the follower is unreachable. We aggressively 
-/// reset `next` to `match`+1 since if we receive any `msgAppResp` soon, both `match` and `next` 
-/// will increase directly to the `index` in `msgAppResp`. (We might end up with sending some 
+/// A progress changes to `replicate` when the follower replies with a non-rejection `msgAppResp`,
+/// which implies that it has matched the index sent. At this point, leader starts to stream log
+/// entries to the follower fast. The progress will fall back to `probe` when the follower replies
+/// a rejection `msgAppResp` or the link layer reports the follower is unreachable. We aggressively
+/// reset `next` to `match`+1 since if we receive any `msgAppResp` soon, both `match` and `next`
+/// will increase directly to the `index` in `msgAppResp`. (We might end up with sending some
 /// duplicate entries when aggressively reset `next` too low.  see open question)
 
-/// A progress changes from `probe` to `snapshot` when the follower falls very far behind and requires 
-/// a snapshot. After sending `msgSnap`, the leader waits until the success, failure or abortion of the 
+/// A progress changes from `probe` to `snapshot` when the follower falls very far behind and requires
+/// a snapshot. After sending `msgSnap`, the leader waits until the success, failure or abortion of the
 /// previous snapshot sent. The progress will go back to `probe` after the sending result is applied.
 
 /// ### Flow Control
 
 /// 1. limit the max size of message sent per message. Max should be configurable.
-/// Lower the cost at probing state as we limit the size per message; lower the penalty when aggressively 
+/// Lower the cost at probing state as we limit the size per message; lower the penalty when aggressively
 /// decreased to a too low `next`
 
-/// 2. limit the # of in flight messages < N when in `replicate` state. N should be configurable. Most 
+/// 2. limit the # of in flight messages < N when in `replicate` state. N should be configurable. Most
 /// implementation will have a sending buffer on top of its actual network transport layer (not blocking r
-/// aft node). We want to make sure raft does not overflow that buffer, which can cause message dropping 
-/// and triggering a bunch of unnecessary resending repeatedly. 
-
-
+/// aft node). We want to make sure raft does not overflow that buffer, which can cause message dropping
+/// and triggering a bunch of unnecessary resending repeatedly.
 use std::cmp;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -108,9 +106,9 @@ pub struct Progress {
 
 impl Progress {
     pub fn new(next: u64, ins_size: usize, is_learner: bool) -> Progress {
-        Progress{
+        Progress {
             next,
-            is_learner, 
+            is_learner,
             ins: Inflights::new(ins_size),
             ..Default::default()
         }
@@ -125,9 +123,9 @@ impl Progress {
 
     pub fn become_probe(&mut self) {
         // If the original state is ProgressState::Snapshot, progress knows that
-	    // the pending snapshot has been sent to this peer successfully, then
-	    // probes from pendingSnapshot + 1.
-        // otherwise original state should be ProgressState::Replicate, this means 
+        // the pending snapshot has been sent to this peer successfully, then
+        // probes from pendingSnapshot + 1.
+        // otherwise original state should be ProgressState::Replicate, this means
         // follower reject leader's sending replicate msg request.
         if self.state == ProgressState::Snapshot {
             let pending_snapshot = self.pending_snapshot;
@@ -140,7 +138,7 @@ impl Progress {
     }
 
     pub fn become_replicate(&mut self) {
-        // Original state must be ProgressState::Probe, and send msg successfully, 
+        // Original state must be ProgressState::Probe, and send msg successfully,
         // matchd should be matchd = m.index, next = matched + 1
         self.reset_state(ProgressState::Replicate);
         self.next = self.matched + 1;
@@ -171,14 +169,14 @@ impl Progress {
             self.resume();
         }
 
-        if self.next < n+1 {
+        if self.next < n + 1 {
             self.next = n + 1;
         }
 
         updated
     }
 
-    // when the progress of a follower is in `replicate` state, leader sends 
+    // when the progress of a follower is in `replicate` state, leader sends
     // `replication message`, then optimistically increases `next` to the latest entry sent.
     pub fn optimistic_update(&mut self, n: u64) {
         self.next = n + 1;
@@ -193,7 +191,7 @@ impl Progress {
             ProgressState::Probe => self.paused,
             ProgressState::Replicate => self.ins.full(),
 
-            // When the progress of a follower is in `snapshot` state, 
+            // When the progress of a follower is in `snapshot` state,
             // leader stops sending any `replication message`.
             ProgressState::Snapshot => true,
         }
@@ -243,18 +241,18 @@ pub struct Inflights {
     // number of inflights in the buffer
     pub count: usize,
     // buffer contains the index of the last entry
-	// inside one message.
+    // inside one message.
     pub buffer: Vec<u64>,
 }
 
 impl Inflights {
     pub(crate) fn new(cap: usize) -> Inflights {
-        Inflights{
+        Inflights {
             buffer: Vec::with_capacity(cap),
             ..Default::default()
         }
     }
-    
+
     fn reset(&mut self) {
         self.start = 0;
         self.count = 0;
@@ -303,7 +301,7 @@ impl Inflights {
         let mut idx = self.start;
         while i < self.count {
             if to < self.buffer[idx] {
-                break 
+                break;
             }
 
             let size = self.cap();
@@ -320,7 +318,7 @@ impl Inflights {
         self.start = idx;
         if self.count == 0 {
             // inflights is empty, reset the start index so that we don't grow the
-		    // buffer unnecessarily.
+            // buffer unnecessarily.
             self.start = 0;
         }
     }
@@ -337,7 +335,7 @@ mod test {
             inflight.add(i);
         }
 
-        let wantin = Inflights{
+        let wantin = Inflights {
             start: 0,
             count: 5,
             buffer: vec![0, 1, 2, 3, 4],
@@ -349,7 +347,7 @@ mod test {
             inflight.add(i);
         }
 
-        let wantin2 = Inflights{
+        let wantin2 = Inflights {
             start: 0,
             count: 10,
             buffer: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -357,7 +355,7 @@ mod test {
 
         assert_eq!(inflight, wantin2);
 
-        let mut inflight2 = Inflights{
+        let mut inflight2 = Inflights {
             start: 5,
             buffer: Vec::with_capacity(10),
             ..Default::default()
@@ -369,7 +367,7 @@ mod test {
             inflight2.add(i);
         }
 
-        let wantin21 = Inflights{
+        let wantin21 = Inflights {
             start: 5,
             count: 5,
             buffer: vec![0, 0, 0, 0, 0, 0, 1, 2, 3, 4],
@@ -381,7 +379,7 @@ mod test {
             inflight2.add(i);
         }
 
-        let wantin22 = Inflights{
+        let wantin22 = Inflights {
             start: 5,
             count: 10,
             buffer: vec![5, 6, 7, 8, 9, 0, 1, 2, 3, 4],
@@ -399,7 +397,7 @@ mod test {
 
         inflight.free_to(4);
 
-        let wantin = Inflights{
+        let wantin = Inflights {
             start: 5,
             count: 5,
             buffer: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -409,8 +407,8 @@ mod test {
 
         inflight.free_to(8);
 
-        let wantin2 = Inflights{
-            start: 9, 
+        let wantin2 = Inflights {
+            start: 9,
             count: 1,
             buffer: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         };
@@ -423,7 +421,7 @@ mod test {
 
         inflight.free_to(12);
 
-        let wantin3 = Inflights{
+        let wantin3 = Inflights {
             start: 3,
             count: 2,
             buffer: vec![10, 11, 12, 13, 14, 5, 6, 7, 8, 9],
@@ -433,7 +431,7 @@ mod test {
 
         inflight.free_to(14);
 
-        let wantin4 = Inflights{
+        let wantin4 = Inflights {
             start: 0,
             count: 0,
             buffer: vec![10, 11, 12, 13, 14, 5, 6, 7, 8, 9],
