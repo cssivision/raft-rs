@@ -412,7 +412,7 @@ impl<T: Storage> Raft<T> {
 			Err(e) => panic!("unexpected error getting uncommitted entries ({:?})", e),
 		};
 
-		// Conservatively set the pendingConfIndex to the last index in the
+		// Conservatively set the pending_conf_index to the last index in the
 		// log. There may or may not be a pending config change, but it's
 		// safe to delay any future proposals until we commit all our
 		// pending log entries, and scanning the entire tail of the log

@@ -264,7 +264,7 @@ impl Storage for MemStorage {
         let core = self.read_lock();
         let offset = core.entries[0].get_index();
 
-        if index <= offset {
+        if index < offset {
             return Err(Error::Storage(StorageError::Compacted));
         }
         if index - offset >= core.entries.len() as u64 {
@@ -277,5 +277,80 @@ impl Storage for MemStorage {
     fn snapshot(&self) -> Result<Snapshot> {
         let core = self.read_lock();
         Ok(core.snapshot.clone())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use util::NO_LIMIT;
+    use protobuf::Message;
+
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::new();
+        e.set_term(term);
+        e.set_index(index);
+        e
+    }
+
+    fn new_memory_storage(ents: Vec<Entry>) -> MemStorage {
+        let mut s = MemStorage::new();
+        let mut core = MemStorageCore::default();
+        core.entries = ents;
+        s.core = Arc::new(RwLock::new(core));
+        s
+    }
+
+    #[test]
+    fn test_storage_term() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let tests = vec![
+            (2, Some(Error::Storage(StorageError::Compacted)), 0),
+            (3, None, 3),
+            (4, None, 4),
+            (5, None, 5),
+            (6, Some(Error::Storage(StorageError::Unavailable)), 0)
+        ];
+
+        let s = new_memory_storage(ents);
+        for (i, werr, wterm) in tests {
+            match s.term(i) {
+                Err(e) => {
+                    assert_eq!(e, werr.unwrap());
+                }
+                Ok(t) => {
+                    assert_eq!(t, wterm);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_storage_entries() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let tests = vec![
+            (2, 6, NO_LIMIT, Some(Error::Storage(StorageError::Compacted)), None),
+            (3, 4, NO_LIMIT, Some(Error::Storage(StorageError::Compacted)), None),
+            (4, 5, NO_LIMIT, None, Some(vec![new_entry(4, 4)])),
+            (4, 6, NO_LIMIT, None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, NO_LIMIT, None, Some(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+            (4, 7, 0, None, Some(vec![new_entry(4, 4)])),
+            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])), None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])+Message::compute_size(&ents[3])/2), None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])+Message::compute_size(&ents[3])-1), None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])+Message::compute_size(&ents[3])), None, Some(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+        ];
+
+        let s = new_memory_storage(ents);
+        for (lo, hi, max_size, werr, wents) in tests {
+            match s.entries(lo, hi, max_size) {
+                Err(e) => {
+                    assert_eq!(e, werr.unwrap());
+                }
+                Ok(ents) => {
+                    assert_eq!(ents, wents.unwrap());
+                }
+            }
+        }
     }
 }
