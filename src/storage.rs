@@ -104,6 +104,9 @@ impl MemStorageCore {
         Ok(())
     }
 
+    // Append the new entries to storage.
+    // ensure the entries are continuous and
+    // entries[0].index > ms.entries[0].index
     pub fn append(&mut self, ents: &[Entry]) -> Result<()> {
         if ents.is_empty() {
             return Ok(());
@@ -125,7 +128,7 @@ impl MemStorageCore {
             ents
         };
 
-        let offset = ents[0].get_index() - self.entries[0].get_index();
+        let offset = te[0].get_index() - self.entries[0].get_index();
 
         if self.entries.len() as u64 > offset {
             let mut new_entries: Vec<Entry> = vec![];
@@ -212,6 +215,14 @@ impl MemStorage {
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         self.write_lock().apply_snapshot(snapshot)
     }
+
+    fn get_entries(&self) -> Vec<Entry> {
+        self.read_lock().entries.to_vec()
+    }
+
+    fn compact(&mut self, index: u64) -> Result<()> {
+        self.write_lock().compact(index)
+    }
 }
 
 impl Storage for MemStorage {
@@ -283,8 +294,8 @@ impl Storage for MemStorage {
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::NO_LIMIT;
     use protobuf::Message;
+    use util::NO_LIMIT;
 
     fn new_entry(index: u64, term: u64) -> Entry {
         let mut e = Entry::new();
@@ -309,7 +320,7 @@ mod test {
             (3, None, 3),
             (4, None, 4),
             (5, None, 5),
-            (6, Some(Error::Storage(StorageError::Unavailable)), 0)
+            (6, Some(Error::Storage(StorageError::Unavailable)), 0),
         ];
 
         let s = new_memory_storage(ents);
@@ -327,18 +338,80 @@ mod test {
 
     #[test]
     fn test_storage_entries() {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let ents = vec![
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 5),
+            new_entry(6, 6),
+        ];
         let tests = vec![
-            (2, 6, NO_LIMIT, Some(Error::Storage(StorageError::Compacted)), None),
-            (3, 4, NO_LIMIT, Some(Error::Storage(StorageError::Compacted)), None),
+            (
+                2,
+                6,
+                NO_LIMIT,
+                Some(Error::Storage(StorageError::Compacted)),
+                None,
+            ),
+            (
+                3,
+                4,
+                NO_LIMIT,
+                Some(Error::Storage(StorageError::Compacted)),
+                None,
+            ),
             (4, 5, NO_LIMIT, None, Some(vec![new_entry(4, 4)])),
-            (4, 6, NO_LIMIT, None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, NO_LIMIT, None, Some(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+            (
+                4,
+                6,
+                NO_LIMIT,
+                None,
+                Some(vec![new_entry(4, 4), new_entry(5, 5)]),
+            ),
+            (
+                4,
+                7,
+                NO_LIMIT,
+                None,
+                Some(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]),
+            ),
             (4, 7, 0, None, Some(vec![new_entry(4, 4)])),
-            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])), None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])+Message::compute_size(&ents[3])/2), None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])+Message::compute_size(&ents[3])-1), None, Some(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, u64::from(Message::compute_size(&ents[1])+Message::compute_size(&ents[2])+Message::compute_size(&ents[3])), None, Some(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+            (
+                4,
+                7,
+                u64::from(Message::compute_size(&ents[1]) + Message::compute_size(&ents[2])),
+                None,
+                Some(vec![new_entry(4, 4), new_entry(5, 5)]),
+            ),
+            (
+                4,
+                7,
+                u64::from(
+                    Message::compute_size(&ents[1]) + Message::compute_size(&ents[2])
+                        + Message::compute_size(&ents[3]) / 2,
+                ),
+                None,
+                Some(vec![new_entry(4, 4), new_entry(5, 5)]),
+            ),
+            (
+                4,
+                7,
+                u64::from(
+                    Message::compute_size(&ents[1]) + Message::compute_size(&ents[2])
+                        + Message::compute_size(&ents[3]) - 1,
+                ),
+                None,
+                Some(vec![new_entry(4, 4), new_entry(5, 5)]),
+            ),
+            (
+                4,
+                7,
+                u64::from(
+                    Message::compute_size(&ents[1]) + Message::compute_size(&ents[2])
+                        + Message::compute_size(&ents[3]),
+                ),
+                None,
+                Some(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]),
+            ),
         ];
 
         let s = new_memory_storage(ents);
@@ -353,4 +426,115 @@ mod test {
             }
         }
     }
+
+    #[test]
+    fn test_storage_append() {
+        let tests = vec![
+            (
+                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
+                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
+            ),
+            (
+                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
+                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
+            ),
+            (
+                vec![
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 5),
+                    new_entry(6, 5),
+                ],
+                vec![
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 5),
+                    new_entry(6, 5),
+                ],
+            ),
+            (
+                vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
+                vec![new_entry(3, 3), new_entry(4, 5)],
+            ),
+            (
+                vec![new_entry(6, 5)],
+                vec![
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 5),
+                    new_entry(6, 5),
+                ],
+            ),
+        ];
+
+        for (ents, wents) in tests {
+            let mut s = new_memory_storage(vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)]);
+            match s.append(&ents) {
+                Err(e) => panic!(e),
+                Ok(_) => assert_eq!(s.get_entries(), wents),
+            }
+        }
+    }
+
+    #[test]
+    fn test_storage_last_index() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut s = new_memory_storage(ents);
+
+        match s.last_index() {
+            Err(e) => panic!(e),
+            Ok(last) => assert_eq!(last, 5),
+        }
+
+        s.append(&vec![new_entry(6, 5)]).unwrap();
+        match s.last_index() {
+            Err(e) => panic!(e),
+            Ok(last) => assert_eq!(last, 6),
+        }
+    }
+
+    #[test]
+    fn test_storage_first_index() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut s = new_memory_storage(ents);
+
+        match s.first_index() {
+            Err(e) => panic!(e),
+            Ok(first) => assert_eq!(first, 4),
+        }
+
+        s.compact(4).unwrap();
+        match s.first_index() {
+            Err(e) => panic!(e),
+            Ok(last) => assert_eq!(last, 5),
+        }
+    }
+
+    #[test]
+    fn test_storage_compact() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let tests = vec![
+            (2, Err(Error::Storage(StorageError::Compacted)), 3, 3, 3),
+            (3, Err(Error::Storage(StorageError::Compacted)), 3, 3, 3),
+            (4, Ok(()), 4, 4, 2),
+            (5, Ok(()), 5, 5, 1),
+        ];
+
+        for (i, werr, windex, wterm, wlen) in tests {
+            let mut s = new_memory_storage(ents.to_vec());
+
+            assert_eq!(s.compact(i), werr);
+            assert_eq!(s.get_entries()[0].get_index(), windex);
+            assert_eq!(s.get_entries()[0].get_term(), wterm);
+            assert_eq!(s.get_entries().len(), wlen);
+        }
+    }
+
+    #[test]
+    fn test_storage_create_snapshot() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+    }
+
+    #[test]
+    fn test_storage_apply_snapshot() {}
 }
