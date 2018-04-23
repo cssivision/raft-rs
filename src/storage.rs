@@ -153,7 +153,7 @@ impl MemStorageCore {
         index: u64,
         cs: Option<ConfState>,
         data: Vec<u8>,
-    ) -> Result<Snapshot> {
+    ) -> Result<&Snapshot> {
         if index <= self.snapshot.get_metadata().get_index() {
             return Err(Error::Storage(StorageError::SnapshotOutOfDate));
         }
@@ -177,7 +177,7 @@ impl MemStorageCore {
         }
 
         self.snapshot.set_data(data);
-        Ok(self.snapshot.clone())
+        Ok(&self.snapshot)
     }
 }
 
@@ -222,15 +222,6 @@ impl MemStorage {
 
     fn compact(&mut self, index: u64) -> Result<()> {
         self.write_lock().compact(index)
-    }
-
-    pub fn create_snapshot(
-        &mut self,
-        index: u64,
-        cs: Option<ConfState>,
-        data: Vec<u8>,
-    ) -> Result<Snapshot> {
-        self.write_lock().create_snapshot(index, cs, data)
     }
 }
 
@@ -559,22 +550,22 @@ mod test {
         let data: Vec<u8> = Vec::from("data");
 
         let mut s = new_memory_storage(ents.clone());
-        match s.create_snapshot(4, Some(cs.clone()), data.clone()) {
+        match s.write_lock()
+            .create_snapshot(4, Some(cs.clone()), data.clone())
+        {
             Err(e) => panic!(e),
             Ok(snapshot) => {
                 let wsnapshot = new_snapshot(4, 4, cs.clone(), data.clone());
-                assert_eq!(snapshot, wsnapshot);
+                assert_eq!(snapshot, &wsnapshot);
             }
         }
 
         let mut s = new_memory_storage(ents);
-        match s.create_snapshot(5, Some(cs.clone()), data.clone()) {
-            Err(e) => panic!(e),
-            Ok(snapshot) => {
-                let wsnapshot = new_snapshot(5, 5, cs.clone(), data.clone());
-                assert_eq!(snapshot, wsnapshot);
-            }
-        }
+        s.write_lock()
+            .create_snapshot(5, Some(cs.clone()), data.clone())
+            .unwrap();
+        let wsnapshot = new_snapshot(5, 5, cs.clone(), data.clone());
+        assert_eq!(s.snapshot(), Ok(wsnapshot));
     }
 
     #[test]
