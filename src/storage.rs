@@ -153,7 +153,7 @@ impl MemStorageCore {
         index: u64,
         cs: Option<ConfState>,
         data: Vec<u8>,
-    ) -> Result<&Snapshot> {
+    ) -> Result<Snapshot> {
         if index <= self.snapshot.get_metadata().get_index() {
             return Err(Error::Storage(StorageError::SnapshotOutOfDate));
         }
@@ -177,7 +177,7 @@ impl MemStorageCore {
         }
 
         self.snapshot.set_data(data);
-        Ok(&self.snapshot)
+        Ok(self.snapshot.clone())
     }
 }
 
@@ -222,6 +222,15 @@ impl MemStorage {
 
     fn compact(&mut self, index: u64) -> Result<()> {
         self.write_lock().compact(index)
+    }
+
+    pub fn create_snapshot(
+        &mut self,
+        index: u64,
+        cs: Option<ConfState>,
+        data: Vec<u8>,
+    ) -> Result<Snapshot> {
+        self.write_lock().create_snapshot(index, cs, data)
     }
 }
 
@@ -295,6 +304,7 @@ impl Storage for MemStorage {
 mod test {
     use super::*;
     use protobuf::Message;
+    use raftpb::SnapshotMetadata;
     use util::NO_LIMIT;
 
     fn new_entry(index: u64, term: u64) -> Entry {
@@ -310,6 +320,17 @@ mod test {
         core.entries = ents;
         s.core = Arc::new(RwLock::new(core));
         s
+    }
+
+    fn new_snapshot(index: u64, term: u64, cs: ConfState, data: Vec<u8>) -> Snapshot {
+        let mut snapshot = Snapshot::new();
+        snapshot.set_data(data);
+        let mut meta = SnapshotMetadata::new();
+        meta.set_conf_state(cs.clone());
+        meta.set_index(index);
+        meta.set_term(term);
+        snapshot.set_metadata(meta);
+        snapshot
     }
 
     #[test]
@@ -533,8 +554,44 @@ mod test {
     #[test]
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut cs = ConfState::new();
+        cs.set_nodes(vec![1, 2, 3]);
+        let data: Vec<u8> = Vec::from("data");
+
+        let mut s = new_memory_storage(ents.clone());
+        match s.create_snapshot(4, Some(cs.clone()), data.clone()) {
+            Err(e) => panic!(e),
+            Ok(snapshot) => {
+                let wsnapshot = new_snapshot(4, 4, cs.clone(), data.clone());
+                assert_eq!(snapshot, wsnapshot);
+            }
+        }
+
+        let mut s = new_memory_storage(ents);
+        match s.create_snapshot(5, Some(cs.clone()), data.clone()) {
+            Err(e) => panic!(e),
+            Ok(snapshot) => {
+                let wsnapshot = new_snapshot(5, 5, cs.clone(), data.clone());
+                assert_eq!(snapshot, wsnapshot);
+            }
+        }
     }
 
     #[test]
-    fn test_storage_apply_snapshot() {}
+    fn test_storage_apply_snapshot() {
+        let mut cs = ConfState::new();
+        cs.set_nodes(vec![1, 2, 3]);
+        let data: Vec<u8> = Vec::from("data");
+
+        let mut s = new_memory_storage(vec![]);
+        assert_eq!(
+            Ok(()),
+            s.apply_snapshot(new_snapshot(4, 4, cs.clone(), data.clone()))
+        );
+
+        assert_eq!(
+            Err(Error::Storage(StorageError::SnapshotOutOfDate)),
+            s.apply_snapshot(new_snapshot(3, 3, cs.clone(), data.clone()))
+        );
+    }
 }
