@@ -549,7 +549,7 @@ mod test {
         cs.set_nodes(vec![1, 2, 3]);
         let data: Vec<u8> = Vec::from("data");
 
-        let mut s = new_memory_storage(ents.clone());
+        let s = new_memory_storage(ents.clone());
         match s.write_lock()
             .create_snapshot(4, Some(cs.clone()), data.clone())
         {
@@ -560,7 +560,7 @@ mod test {
             }
         }
 
-        let mut s = new_memory_storage(ents);
+        let s = new_memory_storage(ents);
         s.write_lock()
             .create_snapshot(5, Some(cs.clone()), data.clone())
             .unwrap();

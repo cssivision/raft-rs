@@ -280,8 +280,8 @@ impl<T: Storage> RaftLog<T> {
                         self.zero_term_on_err_compacted(self.term(e.get_index())),
                         e.get_term(),
                     );
-                    return e.get_index();
                 }
+                return e.get_index();
             }
         }
         0
@@ -366,6 +366,252 @@ impl<T: Storage> RaftLog<T> {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use storage::MemStorage;
+
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::new();
+        e.set_term(term);
+        e.set_index(index);
+        e
+    }
+
+    fn new_raft_log<T: Storage>(storage: T, tag: String) -> RaftLog<T> {
+        RaftLog::new(storage, tag)
+    }
+
     #[test]
-    fn test_find_conflict() {}
+    fn test_find_conflict() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
+        let tag = "".to_string();
+        let tests = vec![
+            (vec![], 0),
+            (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)], 0),
+            (vec![new_entry(2, 2), new_entry(3, 3)], 0),
+            (vec![new_entry(3, 3)], 0),
+            (
+                vec![
+                    new_entry(1, 1),
+                    new_entry(2, 2),
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 4),
+                ],
+                4,
+            ),
+            (
+                vec![
+                    new_entry(2, 2),
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 4),
+                ],
+                4,
+            ),
+            (vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
+            (vec![new_entry(1, 4), new_entry(2, 4)], 1),
+            (vec![new_entry(2, 1), new_entry(3, 4), new_entry(4, 4)], 2),
+            (
+                vec![
+                    new_entry(3, 1),
+                    new_entry(4, 2),
+                    new_entry(5, 4),
+                    new_entry(6, 4),
+                ],
+                3,
+            ),
+        ];
+
+        for (ents, wconflict) in tests {
+            let mut log = new_raft_log(MemStorage::new(), tag.clone());
+            log.append(&previous_ents);
+            assert_eq!(log.find_conflict(&ents), wconflict);
+        }
+    }
+
+    #[test]
+    fn test_is_up_to_date() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
+        let tag = "".to_string();
+        let mut log = new_raft_log(MemStorage::new(), tag);
+        log.append(&previous_ents);
+
+        let tests = vec![
+            (log.last_index() - 1, 4, true),
+            (log.last_index(), 4, true),
+            (log.last_index() + 1, 4, true),
+            (log.last_index() - 1, 2, false),
+            (log.last_index(), 2, false),
+            (log.last_index() + 1, 2, false),
+            (log.last_index() - 1, 3, false),
+            (log.last_index(), 3, true),
+            (log.last_index() + 1, 3, true),
+        ];
+
+        for (lasti, term, w_up_to_date) in tests {
+            assert_eq!(log.is_up_to_date(lasti, term), w_up_to_date);
+        }
+    }
+
+    #[test]
+    fn test_append() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2)];
+
+        let tests = vec![
+            (vec![], 2, vec![new_entry(1, 1), new_entry(2, 2)], 3),
+            (
+                vec![new_entry(3, 2)],
+                3,
+                vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 2)],
+                3,
+            ),
+            (vec![new_entry(1, 2)], 1, vec![new_entry(1, 2)], 1),
+            (
+                vec![new_entry(2, 3), new_entry(3, 3)],
+                3,
+                vec![new_entry(1, 1), new_entry(2, 3), new_entry(3, 3)],
+                2,
+            ),
+        ];
+
+        for (ents, windex, wents, wunstable) in tests {
+            let mut storage = MemStorage::new();
+            storage.append(&previous_ents).unwrap();
+            let mut log = new_raft_log(storage, String::default());
+            assert_eq!(log.append(&ents), windex);
+            match log.entries(1, NO_LIMIT) {
+                Err(e) => panic!(e),
+                Ok(es) => assert_eq!(es, wents),
+            }
+            assert_eq!(log.unstable.offset, wunstable);
+        }
+    }
+
+    #[test]
+    fn test_maybe_append() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
+        let last_index = 3;
+        let last_term = 3;
+        let commit = 1;
+
+        let tests = vec![
+            (
+                last_term - 1,
+                last_index,
+                last_index,
+                vec![new_entry(last_index + 1, 4)],
+                None,
+                commit,
+            ),
+            (
+                last_term,
+                last_index + 1,
+                last_index,
+                vec![new_entry(last_index + 2, 4)],
+                None,
+                commit,
+            ),
+            (
+                last_term,
+                last_index,
+                last_index,
+                vec![],
+                Some(last_index),
+                last_index,
+            ),
+            (
+                last_term,
+                last_index,
+                last_index + 1,
+                vec![],
+                Some(last_index),
+                last_index,
+            ),
+            (
+                last_term,
+                last_index,
+                last_index - 1,
+                vec![],
+                Some(last_index),
+                last_index - 1,
+            ),
+            (0, 0, last_index + 1, vec![], Some(0), commit),
+            (
+                last_term,
+                last_index,
+                last_index,
+                vec![new_entry(last_index + 1, 4)],
+                Some(last_index + 1),
+                last_index,
+            ),
+            (
+                last_term,
+                last_index,
+                last_index + 1,
+                vec![new_entry(last_index + 1, 4)],
+                Some(last_index + 1),
+                last_index + 1,
+            ),
+            (
+                last_term,
+                last_index,
+                last_index + 2,
+                vec![new_entry(last_index + 1, 4)],
+                Some(last_index + 1),
+                last_index + 1,
+            ),
+            (
+                last_term,
+                last_index,
+                last_index + 2,
+                vec![new_entry(last_index + 1, 4), new_entry(last_index + 2, 4)],
+                Some(last_index + 2),
+                last_index + 2,
+            ),
+            (
+                last_term - 1,
+                last_index - 1,
+                last_index,
+                vec![new_entry(last_index, 4)],
+                Some(last_index),
+                last_index,
+            ),
+            (
+                last_term - 2,
+                last_index - 2,
+                last_index,
+                vec![new_entry(last_index - 1, 4)],
+                Some(last_index - 1),
+                last_index - 1,
+            ),
+            (
+                last_term - 2,
+                last_index - 2,
+                last_index,
+                vec![new_entry(last_index - 1, 4), new_entry(last_index, 4)],
+                Some(last_index),
+                last_index,
+            ),
+        ];
+
+        for (log_term, index, committed, ents, wlasti, wcommit) in tests {
+            let mut log = new_raft_log(MemStorage::new(), String::default());
+            log.append(&previous_ents);
+            log.committed = commit;
+
+            let glasti = log.maybe_append(index, log_term, committed, &ents);
+            assert_eq!(wlasti, glasti);
+            assert_eq!(log.committed, wcommit);
+            if glasti.is_some() && !ents.is_empty() {
+                match log.slice(
+                    log.last_index() - ents.len() as u64 + 1,
+                    log.last_index() + 1,
+                    NO_LIMIT,
+                ) {
+                    Err(e) => panic!(e),
+                    Ok(gents) => assert_eq!(gents, ents),
+                }
+            }
+        }
+    }
 }
