@@ -367,6 +367,7 @@ impl<T: Storage> RaftLog<T> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use raftpb::SnapshotMetadata;
     use storage::MemStorage;
 
     fn new_entry(index: u64, term: u64) -> Entry {
@@ -378,6 +379,15 @@ mod test {
 
     fn new_raft_log<T: Storage>(storage: T, tag: String) -> RaftLog<T> {
         RaftLog::new(storage, tag)
+    }
+
+    fn new_snapshot(index: u64, term: u64) -> Snapshot {
+        let mut s = Snapshot::new();
+        let mut sm = SnapshotMetadata::new();
+        sm.set_index(index);
+        sm.set_term(term);
+        s.set_metadata(sm);
+        s
     }
 
     #[test]
@@ -614,4 +624,145 @@ mod test {
             }
         }
     }
+
+    #[test]
+    fn test_compaction_side_effects() {
+        let last_index = 1000;
+        let unstable_index = 750;
+        let last_term = last_index;
+        let mut storage = MemStorage::new();
+        for i in 1..unstable_index + 1 {
+            storage.append(&vec![new_entry(i, i)]).unwrap();
+        }
+
+        let mut log = new_raft_log(storage, String::default());
+        for i in unstable_index..last_index {
+            log.append(&vec![new_entry(i + 1, i + 1)]);
+        }
+        assert!(log.maybe_commit(last_index, last_term));
+        let committed = log.committed;
+        log.applied_to(committed);
+
+        let offset = 500;
+        log.storage.compact(offset).unwrap();
+        assert_eq!(log.last_index(), last_index);
+        for j in offset..log.last_index() + 1 {
+            assert_eq!(log.term(j).unwrap(), j);
+        }
+
+        for j in offset..log.last_index() + 1 {
+            assert!(log.match_term(j, j));
+        }
+
+        assert_eq!(log.unstable_entries().len(), 250);
+        assert_eq!(log.unstable_entries()[0].get_index(), 751);
+
+        let prev = log.last_index();
+        log.append(&vec![new_entry(prev + 1, prev + 1)]);
+        assert_eq!(log.last_index(), prev + 1);
+
+        let last_index = log.last_index();
+        match log.entries(last_index, NO_LIMIT) {
+            Err(e) => panic!(e),
+            Ok(ents) => assert_eq!(ents.len(), 1),
+        }
+    }
+
+    #[test]
+    fn test_hast_next_ents() {
+        let snap = new_snapshot(3, 1);
+        let ents = vec![new_entry(4, 1), new_entry(5, 1), new_entry(6, 1)];
+        let tests = vec![(0, true), (3, true), (4, true), (5, false)];
+
+        for (applied, has_next) in tests {
+            let mut storage = MemStorage::new();
+            storage.apply_snapshot(snap.clone()).unwrap();
+            let mut log = new_raft_log(storage, String::default());
+            log.append(&ents);
+            log.maybe_commit(5, 1);
+            log.applied_to(applied);
+
+            assert_eq!(has_next, log.has_next_ents());
+        }
+    }
+
+    #[test]
+    fn test_next_ents() {
+        let snap = new_snapshot(3, 1);
+        let ents = vec![new_entry(4, 1), new_entry(5, 1), new_entry(6, 1)];
+        let tests = vec![
+            (0, &ents[0..2]),
+            (3, &ents[0..2]),
+            (4, &ents[1..2]),
+            (5, &ents[0..0]),
+        ];
+
+        for (applied, wents) in tests {
+            let mut storage = MemStorage::new();
+            storage.apply_snapshot(snap.clone()).unwrap();
+            let mut log = new_raft_log(storage, String::default());
+            log.append(&ents);
+            log.maybe_commit(5, 1);
+            log.applied_to(applied);
+
+            assert_eq!(wents.to_vec(), log.next_ents());
+        }
+    }
+
+    #[test]
+    fn test_term() {
+        let offset = 100;
+        let num = 100;
+        let mut storage = MemStorage::new();
+        storage.apply_snapshot(new_snapshot(offset, 1)).unwrap();
+        let mut log = new_raft_log(storage, String::default());
+
+        for i in 1..num {
+            log.append(&vec![new_entry(offset + i, i)]);
+        }
+
+        let tests = vec![
+            (offset - 1, 0),
+            (offset, 1),
+            (offset + num / 2, num / 2),
+            (offset + num - 1, num - 1),
+            (offset + num, 0),
+        ];
+
+        for (index, w) in tests {
+            match log.term(index) {
+                Err(e) => panic!(e),
+                Ok(i) => assert_eq!(i, w),
+            }
+        }
+    }
+
+    #[test]
+    fn test_term_with_unstable_snapshot() {
+        let storage_snapi = 100;
+        let unstable_snapi = storage_snapi + 5;
+        let mut storage = MemStorage::new();
+        storage
+            .apply_snapshot(new_snapshot(storage_snapi, 1))
+            .unwrap();
+        let mut log = new_raft_log(storage, String::default());
+        log.restore(new_snapshot(unstable_snapi, 1));
+
+        let tests = vec![
+            (storage_snapi, 0),
+            (storage_snapi + 1, 0),
+            (unstable_snapi - 1, 0),
+            (unstable_snapi, 1),
+        ];
+
+        for (index, w) in tests {
+            match log.term(index) {
+                Err(e) => panic!(e),
+                Ok(i) => assert_eq!(i, w),
+            }
+        }
+    }
+
+    #[test]
+    fn test_slice() {}
 }

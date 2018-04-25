@@ -220,7 +220,7 @@ impl MemStorage {
         self.read_lock().entries.to_vec()
     }
 
-    fn compact(&mut self, index: u64) -> Result<()> {
+    pub(crate) fn compact(&mut self, index: u64) -> Result<()> {
         self.write_lock().compact(index)
     }
 }
