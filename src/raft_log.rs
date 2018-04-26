@@ -367,6 +367,7 @@ impl<T: Storage> RaftLog<T> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use protobuf::Message;
     use raftpb::SnapshotMetadata;
     use storage::MemStorage;
 
@@ -764,5 +765,103 @@ mod test {
     }
 
     #[test]
-    fn test_slice() {}
+    fn test_slice() {
+        let offset = 100;
+        let num = 100;
+        let last = offset + num;
+        let half = offset + num / 2;
+        let halfe = new_entry(half, half);
+
+        let mut storage = MemStorage::new();
+        storage.apply_snapshot(new_snapshot(offset, 0)).unwrap();
+        for i in 1..num / 2 {
+            storage
+                .append(&vec![new_entry(offset + i, offset + i)])
+                .unwrap();
+        }
+
+        let mut log = new_raft_log(storage, String::default());
+
+        for i in num / 2..num {
+            log.append(&vec![new_entry(offset + i, offset + i)]);
+        }
+
+        let tests = vec![
+            (
+                offset - 1,
+                offset + 1,
+                NO_LIMIT,
+                Err(Error::Storage(StorageError::Compacted)),
+            ),
+            (
+                offset,
+                offset + 1,
+                NO_LIMIT,
+                Err(Error::Storage(StorageError::Compacted)),
+            ),
+            (
+                half - 1,
+                half + 1,
+                NO_LIMIT,
+                Ok(vec![new_entry(half - 1, half - 1), new_entry(half, half)]),
+            ),
+            (half, half + 1, NO_LIMIT, Ok(vec![new_entry(half, half)])),
+            (
+                last - 1,
+                last,
+                NO_LIMIT,
+                Ok(vec![new_entry(last - 1, last - 1)]),
+            ),
+            (
+                half - 1,
+                half + 1,
+                0,
+                Ok(vec![new_entry(half - 1, half - 1)]),
+            ),
+            (
+                half - 1,
+                half + 1,
+                Message::compute_size(&halfe) as u64 + 1,
+                Ok(vec![new_entry(half - 1, half - 1)]),
+            ),
+            (
+                half - 2,
+                half + 1,
+                Message::compute_size(&halfe) as u64 + 1,
+                Ok(vec![new_entry(half - 2, half - 2)]),
+            ),
+            (
+                half - 1,
+                half + 1,
+                Message::compute_size(&halfe) as u64 * 2,
+                Ok(vec![new_entry(half - 1, half - 1), new_entry(half, half)]),
+            ),
+            (
+                half - 1,
+                half + 2,
+                Message::compute_size(&halfe) as u64 * 3,
+                Ok(vec![
+                    new_entry(half - 1, half - 1),
+                    new_entry(half, half),
+                    new_entry(half + 1, half + 1),
+                ]),
+            ),
+            (
+                half,
+                half + 2,
+                Message::compute_size(&halfe) as u64,
+                Ok(vec![new_entry(half, half)]),
+            ),
+            (
+                half,
+                half + 2,
+                Message::compute_size(&halfe) as u64 * 2,
+                Ok(vec![new_entry(half, half), new_entry(half + 1, half + 1)]),
+            ),
+        ];
+
+        for (from, to, limit, wents) in tests {
+            assert_eq!(log.slice(from, to, limit), wents);
+        }
+    }
 }
