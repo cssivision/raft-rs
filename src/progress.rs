@@ -326,7 +326,52 @@ impl Inflights {
 
 #[cfg(test)]
 mod test {
-    use progress::Inflights;
+    use super::*;
+
+    #[test]
+    fn test_become_probe() {
+        let matched = 1;
+        let tests = vec![
+            (
+                Progress {
+                    state: ProgressState::Replicate,
+                    next: 5,
+                    matched: matched,
+                    ins: Inflights::new(256),
+                    ..Default::default()
+                },
+                2,
+            ),
+            (
+                Progress {
+                    state: ProgressState::Snapshot,
+                    next: 5,
+                    pending_snapshot: 10,
+                    matched: matched,
+                    ins: Inflights::new(256),
+                    ..Default::default()
+                },
+                11,
+            ),
+            (
+                Progress {
+                    state: ProgressState::Snapshot,
+                    next: 5,
+                    pending_snapshot: 0,
+                    matched: matched,
+                    ins: Inflights::new(256),
+                    ..Default::default()
+                },
+                2,
+            ),
+        ];
+
+        for (mut p, wnext) in tests {
+            p.become_probe();
+            assert_eq!(matched, p.matched);
+            assert_eq!(wnext, p.next);
+        }
+    }
 
     #[test]
     fn test_inflight_add() {
