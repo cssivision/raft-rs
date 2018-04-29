@@ -1968,3 +1968,176 @@ impl<T: Storage> Raft<T> {
 		self.msgs.push(msg);
 	}
 }
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	use progress::Inflights;
+
+	#[test]
+	fn test_become_probe() {
+		let matched = 1;
+		let tests = vec![
+			(
+				Progress {
+					state: ProgressState::Replicate,
+					next: 5,
+					matched: matched,
+					ins: Inflights::new(256),
+					..Default::default()
+				},
+				2,
+			),
+			(
+				Progress {
+					state: ProgressState::Snapshot,
+					next: 5,
+					pending_snapshot: 10,
+					matched: matched,
+					ins: Inflights::new(256),
+					..Default::default()
+				},
+				11,
+			),
+			(
+				Progress {
+					state: ProgressState::Snapshot,
+					next: 5,
+					pending_snapshot: 0,
+					matched: matched,
+					ins: Inflights::new(256),
+					..Default::default()
+				},
+				2,
+			),
+		];
+
+		for (mut p, wnext) in tests {
+			p.become_probe();
+			assert_eq!(matched, p.matched);
+			assert_eq!(wnext, p.next);
+		}
+	}
+
+	#[test]
+	fn test_become_replicate() {
+		let mut p = Progress {
+			state: ProgressState::Probe,
+			next: 5,
+			matched: 1,
+			ins: Inflights::new(256),
+			..Default::default()
+		};
+
+		p.become_replicate();
+		assert_eq!(p.state, ProgressState::Replicate);
+		assert_eq!(p.matched, 1);
+		assert_eq!(p.matched + 1, p.next);
+	}
+
+	#[test]
+	fn test_become_snapshot() {
+		let mut p = Progress {
+			state: ProgressState::Probe,
+			next: 5,
+			matched: 1,
+			ins: Inflights::new(256),
+			..Default::default()
+		};
+		p.become_snapshot(10);
+		assert_eq!(p.state, ProgressState::Snapshot);
+		assert_eq!(p.pending_snapshot, 10);
+	}
+
+	#[test]
+	fn test_progress_update() {
+		let prev_m = 3;
+		let prev_n = 5;
+
+		let tests = vec![
+			(prev_m - 1, prev_m, prev_n, false),
+			(prev_m, prev_m, prev_n, false),
+			(prev_m + 1, prev_m + 1, prev_n, true),
+			(prev_m + 2, prev_m + 2, prev_n + 1, true),
+		];
+
+		for (update, wm, wn, wok) in tests {
+			let mut p = Progress {
+				matched: prev_m,
+				next: prev_n,
+				..Default::default()
+			};
+
+			assert_eq!(p.maybe_update(update), wok);
+			assert_eq!(p.matched, wm);
+			assert_eq!(p.next, wn);
+		}
+	}
+
+	#[test]
+	fn test_progress_maybe_decr() {
+		let tests = vec![
+			(ProgressState::Replicate, 5, 10, 5, 5, false, 10),
+			(ProgressState::Replicate, 5, 10, 4, 4, false, 10),
+			(ProgressState::Replicate, 5, 10, 9, 9, true, 6),
+			(ProgressState::Probe, 0, 0, 0, 0, false, 0),
+			(ProgressState::Probe, 0, 10, 5, 5, false, 10),
+			(ProgressState::Probe, 0, 10, 9, 9, true, 9),
+			(ProgressState::Probe, 0, 2, 1, 1, true, 1),
+			(ProgressState::Probe, 0, 1, 0, 0, true, 1),
+			(ProgressState::Probe, 0, 10, 9, 2, true, 3),
+			(ProgressState::Probe, 0, 10, 9, 0, true, 1),
+		];
+
+		for (state, m, n, rejected, last, w, wn) in tests {
+			let mut p = Progress {
+				state,
+				matched: m,
+				next: n,
+				..Default::default()
+			};
+
+			assert_eq!(w, p.maybe_decr_to(rejected, last));
+			assert_eq!(p.matched, m);
+			assert_eq!(p.next, wn);
+		}
+	}
+
+	#[test]
+	fn test_progress_is_paused() {
+		let tests = vec![
+			(ProgressState::Probe, false, false),
+			(ProgressState::Probe, true, true),
+			(ProgressState::Replicate, false, false),
+			(ProgressState::Replicate, true, false),
+			(ProgressState::Snapshot, false, true),
+			(ProgressState::Snapshot, true, true),
+		];
+
+		for (state, paused, w) in tests {
+			let mut p = Progress {
+				state,
+				paused,
+				ins: Inflights::new(256),
+				..Default::default()
+			};
+
+			assert_eq!(p.is_paused(), w);
+		}
+	}
+
+	#[test]
+	fn test_progress_resume() {
+		let mut p = Progress {
+			next: 2,
+			paused: true,
+			..Default::default()
+		};
+
+		p.maybe_decr_to(1, 1);
+		assert!(!p.paused);
+		p.paused = true;
+		p.maybe_update(2);
+		assert!(!p.paused);
+	}
+}
