@@ -36,6 +36,7 @@ pub struct Status {
 	pub lead_transferee: u64,
 }
 
+#[derive(Debug, Default)]
 pub struct Config {
 	/// id is the identity of the local raft. ID cannot be 0.
 	pub id: u64,
@@ -1967,12 +1968,19 @@ impl<T: Storage> Raft<T> {
 		}
 		self.msgs.push(msg);
 	}
+
+	fn read_message(&mut self) -> Vec<Message> {
+		let msgs = self.msgs.to_vec();
+		self.msgs.clear();
+		msgs
+	}
 }
 
 #[cfg(test)]
 mod test {
 	use super::*;
 	use progress::Inflights;
+	use storage::MemStorage;
 
 	#[test]
 	fn test_become_probe() {
@@ -2139,5 +2147,75 @@ mod test {
 		p.paused = true;
 		p.maybe_update(2);
 		assert!(!p.paused);
+	}
+
+	#[test]
+	fn test_progress_resume_by_heartbeat_resp() {
+		let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new());
+		r.become_candidate();
+		r.become_leader();
+		r.prs.get_mut(&2).unwrap().paused = true;
+
+		r.step(new_message(1, 1, MessageType::MsgHeartbeat)).is_ok();
+		assert!(r.prs.get(&2).unwrap().paused);
+		r.prs.get_mut(&2).unwrap().become_replicate();
+		r.step(new_message(2, 1, MessageType::MsgHeartbeatResp))
+			.is_ok();
+		assert!(!r.prs.get(&2).unwrap().paused);
+	}
+
+	#[test]
+	fn test_progress_paused() {
+		let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new());
+		r.become_candidate();
+		r.become_leader();
+		let mut m = Message::new();
+		m.set_from(1);
+		m.set_to(1);
+		m.set_msg_type(MessageType::MsgProp);
+		let mut e = Entry::new();
+		e.set_data(Vec::from("somedata"));
+		m.set_entries(RepeatedField::from_vec(vec![e]));
+
+		r.step(m.clone()).is_ok();
+		r.step(m.clone()).is_ok();
+		r.step(m).is_ok();
+		assert_eq!(r.read_message().len(), 1);
+	}
+
+	#[test]
+	fn test_leader_election() {}
+
+	fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
+		let mut m = Message::new();
+		m.set_from(from);
+		m.set_to(to);
+		m.set_msg_type(msg_type);
+		m
+	}
+
+	fn new_test_config(id: u64, peers: Vec<u64>, election: u64, heartbeat: u64) -> Config {
+		Config {
+			id,
+			peers,
+			election_tick: election,
+			heartbeat_tick: heartbeat,
+			max_size_per_msg: NO_LIMIT,
+			max_inflight_msgs: 256,
+			..Default::default()
+		}
+	}
+
+	fn new_test_raft<T: Storage>(
+		id: u64,
+		peers: Vec<u64>,
+		election: u64,
+		heartbeat: u64,
+		storage: T,
+	) -> Raft<T> {
+		Raft::new(
+			&mut new_test_config(id, peers, election, heartbeat),
+			storage,
+		)
 	}
 }
