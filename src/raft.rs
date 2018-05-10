@@ -1979,6 +1979,9 @@ impl<T: Storage> Raft<T> {
 #[cfg(test)]
 mod test {
 	use super::*;
+	use std::ops::Deref;
+	use std::ops::DerefMut;
+
 	use progress::Inflights;
 	use storage::MemStorage;
 
@@ -2225,21 +2228,51 @@ mod test {
 		to: u64,
 	}
 
+	#[derive(Default)]
 	struct Network {
-		peers: HashMap<u64, Raft<MemStorage>>,
+		peers: HashMap<u64, StateMachine>,
 		storage: HashMap<u64, MemStorage>,
 		dropm: HashMap<Connem, f64>,
 		ignorem: HashMap<MessageType, bool>,
 	}
 
-	type StateMachine = Option<Raft<MemStorage>>;
+	#[derive(Default)]
+	struct StateMachine {
+		raft: Option<Raft<MemStorage>>,
+	}
+
+	impl StateMachine {
+		fn new(r: Raft<MemStorage>) -> StateMachine {
+			StateMachine { raft: Some(r) }
+		}
+
+		fn step(&mut self, m: Message) -> Result<()> {
+			match self.raft {
+				None => Ok(()),
+				Some(_) => self.step(m),
+			}
+		}
+	}
+
+	impl Deref for StateMachine {
+		type Target = Raft<MemStorage>;
+		fn deref(&self) -> &Raft<MemStorage> {
+			self.raft.as_ref().unwrap()
+		}
+	}
+
+	impl DerefMut for StateMachine {
+		fn deref_mut(&mut self) -> &mut Raft<MemStorage> {
+			self.raft.as_mut().unwrap()
+		}
+	}
 
 	impl Network {
-		fn new(peers: Vec<StateMachine>) -> Network {
+		fn new(peers: Vec<Option<StateMachine>>) -> Network {
 			Network::new_with_config(peers, false)
 		}
 
-		fn new_with_config(mut peers: Vec<StateMachine>, pre_vote: bool) -> Network {
+		fn new_with_config(mut peers: Vec<Option<StateMachine>>, pre_vote: bool) -> Network {
 			let size = peers.len();
 			let peer_addrs: Vec<u64> = (1..size as u64 + 1).collect();
 			let mut npeers = HashMap::new();
@@ -2254,7 +2287,7 @@ mod test {
 						if pre_vote {
 							cfg.pre_vote = true;
 						}
-						let sm = Raft::new(&mut cfg, s.clone());
+						let sm = StateMachine::new(Raft::new(&mut cfg, s.clone()));
 						npeers.insert(id, sm);
 					}
 					Some(mut p) => {
@@ -2292,8 +2325,7 @@ mod test {
 			Network {
 				peers: npeers,
 				storage: nstorage,
-				dropm: HashMap::new(),
-				ignorem: HashMap::new(),
+				..Default::default()
 			}
 		}
 	}
