@@ -2218,4 +2218,83 @@ mod test {
 			storage,
 		)
 	}
+
+	#[derive(Default, Debug, PartialEq, Eq, Hash)]
+	struct Connem {
+		from: u64,
+		to: u64,
+	}
+
+	struct Network {
+		peers: HashMap<u64, Raft<MemStorage>>,
+		storage: HashMap<u64, MemStorage>,
+		dropm: HashMap<Connem, f64>,
+		ignorem: HashMap<MessageType, bool>,
+	}
+
+	type StateMachine = Option<Raft<MemStorage>>;
+
+	impl Network {
+		fn new(peers: Vec<StateMachine>) -> Network {
+			Network::new_with_config(peers, false)
+		}
+
+		fn new_with_config(mut peers: Vec<StateMachine>, pre_vote: bool) -> Network {
+			let size = peers.len();
+			let peer_addrs: Vec<u64> = (1..size as u64 + 1).collect();
+			let mut npeers = HashMap::new();
+			let mut nstorage = HashMap::new();
+
+			for (p, id) in peers.drain(..).zip(peer_addrs.clone()) {
+				match p {
+					None => {
+						let s = MemStorage::new();
+						nstorage.insert(id, s.clone());
+						let mut cfg = new_test_config(id, peer_addrs.clone(), 10, 1);
+						if pre_vote {
+							cfg.pre_vote = true;
+						}
+						let sm = Raft::new(&mut cfg, s.clone());
+						npeers.insert(id, sm);
+					}
+					Some(mut p) => {
+						p.id = id;
+						let learner_prs = p.take_learner_prs();
+						p.learner_prs = HashMap::new();
+						p.prs = HashMap::new();
+
+						for i in &peer_addrs {
+							if learner_prs.contains_key(i) {
+								p.learner_prs.insert(
+									*i,
+									Progress {
+										is_learner: true,
+										..Default::default()
+									},
+								);
+							} else {
+								p.prs.insert(
+									*i,
+									Progress {
+										..Default::default()
+									},
+								);
+							}
+						}
+
+						let term = p.term;
+						p.reset(term);
+						npeers.insert(id, p);
+					}
+				}
+			}
+
+			Network {
+				peers: npeers,
+				storage: nstorage,
+				dropm: HashMap::new(),
+				ignorem: HashMap::new(),
+			}
+		}
+	}
 }
