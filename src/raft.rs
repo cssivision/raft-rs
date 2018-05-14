@@ -123,6 +123,11 @@ pub struct Config {
 	pub tag: String,
 }
 
+// Calculate the quorum of a Raft cluster with the specified total nodes.
+pub fn quorum(total: usize) -> usize {
+	total / 2 + 1
+}
+
 impl Config {
 	fn validate(&mut self) -> Result<()> {
 		if self.id == NONE {
@@ -1162,7 +1167,9 @@ impl<T: Storage> Raft<T> {
 			}
 			_ => {
 				// All other message types require a progress for msg.from (pr).
-				if !self.prs.contains_key(&msg.get_from()) {
+				if !self.prs.contains_key(&msg.get_from())
+					&& !self.learner_prs.contains_key(&msg.get_from())
+				{
 					debug!(
 						"{} {} no progress available for {}",
 						self.tag,
@@ -1178,6 +1185,8 @@ impl<T: Storage> Raft<T> {
 				let mut old_paused = false;
 				let mut maybe_commit = false;
 				let mut send_append = false;
+				let mut more_to_send = None;
+				let quorum = quorum(prs.len()) as u64;
 
 				if let Some(pr) = prs.get_mut(&msg.get_from())
 					.or_else(|| learner_prs.get_mut(&msg.get_from()))
@@ -1193,7 +1202,13 @@ impl<T: Storage> Raft<T> {
 							);
 						}
 						MessageType::MsgHeartbeatResp => {
-							self.handle_heartbeat_resp(pr, &msg);
+							self.handle_heartbeat_resp(
+								pr,
+								&msg,
+								quorum,
+								&mut send_append,
+								&mut more_to_send,
+							);
 						}
 						MessageType::MsgSnapStatus => {
 							self.handle_snap_status(pr, &msg);
@@ -1232,6 +1247,10 @@ impl<T: Storage> Raft<T> {
 					);
 					self.set_prs(prs);
 					self.set_learner_prs(learner_prs);
+				}
+
+				if let Some(mut m) = more_to_send {
+					self.send(m);
 				}
 
 				Ok(())
@@ -1343,7 +1362,14 @@ impl<T: Storage> Raft<T> {
 		pr.pause();
 	}
 
-	fn handle_heartbeat_resp(&mut self, pr: &mut Progress, msg: &Message) {
+	fn handle_heartbeat_resp(
+		&mut self,
+		pr: &mut Progress,
+		msg: &Message,
+		quorum: u64,
+		send_append: &mut bool,
+		more_to_send: &mut Option<Message>,
+	) {
 		pr.recent_active = true;
 		pr.resume();
 
@@ -1351,14 +1377,14 @@ impl<T: Storage> Raft<T> {
 			pr.ins.free_first_one();
 		}
 		if pr.matched < self.raft_log.last_index() {
-			self.send_append(msg.get_from(), pr);
+			*send_append = true;
 		}
 		if self.read_only.option != ReadOnlyOption::Safe || msg.get_context().is_empty() {
 			return;
 		}
 
-		let ack_count = self.read_only.recv_ack(&msg);
-		if ack_count < self.quorum() {
+		let ack_count = self.read_only.recv_ack(&msg) as u64;
+		if ack_count < quorum {
 			return;
 		}
 
@@ -1377,7 +1403,8 @@ impl<T: Storage> Raft<T> {
 				m.set_msg_type(MessageType::MsgReadIndexResp);
 				m.set_index(rs.index);
 				m.set_entries(RepeatedField::from_vec(msg.get_entries().to_vec()));
-				self.send(m);
+
+				*more_to_send = Some(m);
 			}
 		}
 	}
@@ -1915,7 +1942,7 @@ impl<T: Storage> Raft<T> {
 			.filter(|&id| *id != self_id)
 			.for_each(|&id| {
 				info!(
-					"{} {} [logterm: {}, index: {}] sent {:?} request to {} at term {}",
+					"{}: id: {}, [logterm: {}, index: {}] sent {:?} request to {} at term {}",
 					self.tag,
 					self.id,
 					self.raft_log.last_term(),
@@ -2277,6 +2304,60 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_learner_election_timeout() {
+		let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, MemStorage::new());
+		let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, MemStorage::new());
+		n1.become_follower(1, NONE);
+		n2.become_follower(1, NONE);
+
+		n2.randomized_election_timeout = n2.election_timeout;
+		for _ in 0..n2.election_timeout {
+			n2.tick();
+		}
+
+		assert_eq!(n2.state, StateType::Follower);
+	}
+
+	#[test]
+	fn test_learner_promotion() {
+		let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, MemStorage::new());
+		let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, MemStorage::new());
+		n1.become_follower(1, NONE);
+		n2.become_follower(1, NONE);
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(n1)),
+			Some(StateMachine::new(n2)),
+		]);
+
+		assert!(nt.peers[&1].state != StateType::Leader);
+		let election_timeout = nt.peers[&1].election_timeout;
+		nt.peers.get_mut(&1).unwrap().randomized_election_timeout = election_timeout;
+		for _ in 0..election_timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		assert_eq!(nt.peers[&1].state, StateType::Leader);
+		assert_eq!(nt.peers[&2].state, StateType::Follower);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgBeat)]);
+
+		nt.peers.get_mut(&1).unwrap().add_node(2);
+		nt.peers.get_mut(&2).unwrap().add_node(2);
+		assert!(!nt.peers.get_mut(&2).unwrap().is_learner);
+
+		let election_timeout = nt.peers[&2].election_timeout;
+		nt.peers.get_mut(&2).unwrap().randomized_election_timeout = election_timeout;
+		for _ in 0..election_timeout {
+			nt.peers.get_mut(&2).unwrap().tick();
+		}
+
+		nt.send(vec![new_message(2, 2, MessageType::MsgBeat)]);
+		assert_eq!(nt.peers[&1].state, StateType::Follower);
+		assert_eq!(nt.peers[&2].state, StateType::Leader);
+	}
+
 	fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
 		let mut m = Message::new();
 		m.set_from(from);
@@ -2308,6 +2389,19 @@ mod test {
 			&mut new_test_config(id, peers, election, heartbeat),
 			storage,
 		)
+	}
+
+	fn new_test_learner_raft<T: Storage>(
+		id: u64,
+		peers: Vec<u64>,
+		learners: Vec<u64>,
+		election: u64,
+		heartbeat: u64,
+		storage: T,
+	) -> Raft<T> {
+		let mut cfg = new_test_config(id, peers, election, heartbeat);
+		cfg.learners = learners;
+		Raft::new(&mut cfg, storage)
 	}
 
 	#[derive(Default, Debug, PartialEq, Eq, Hash)]
