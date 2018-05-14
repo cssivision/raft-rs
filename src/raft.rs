@@ -2238,41 +2238,41 @@ mod test {
 				StateType::Leader,
 				1,
 			),
-			// (
-			// 	Network::new_with_config(vec![None, None, NOP_STEPPER], pre_vote),
-			// 	StateType::Leader,
-			// 	1,
-			// ),
-			// (
-			// 	Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER], pre_vote),
-			// 	StateType::Candidate,
-			// 	1,
-			// ),
-			// (
-			// 	Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER, None], pre_vote),
-			// 	StateType::Candidate,
-			// 	1,
-			// ),
-			// (
-			// 	Network::new_with_config(
-			// 		vec![None, NOP_STEPPER, NOP_STEPPER, None, None],
-			// 		pre_vote,
-			// 	),
-			// 	StateType::Leader,
-			// 	1,
-			// ),
+			(
+				Network::new_with_config(vec![None, None, NOP_STEPPER], pre_vote),
+				StateType::Leader,
+				1,
+			),
+			(
+				Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER], pre_vote),
+				StateType::Candidate,
+				1,
+			),
+			(
+				Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER, None], pre_vote),
+				StateType::Candidate,
+				1,
+			),
+			(
+				Network::new_with_config(
+					vec![None, NOP_STEPPER, NOP_STEPPER, None, None],
+					pre_vote,
+				),
+				StateType::Leader,
+				1,
+			),
 		];
 
 		for (mut network, state, exp_term) in tests {
 			network.send(vec![new_message(1, 1, MessageType::MsgHup)]);
 			let sm = network.peers.get(&1).unwrap();
 			let (exp_state, exp_term) = if state == StateType::Candidate && pre_vote {
-				(StateType::Candidate, 0)
+				(StateType::PreCandidate, 0)
 			} else {
 				(state, exp_term)
 			};
 
-			assert_eq!(state, exp_state);
+			assert_eq!(sm.state, exp_state);
 			assert_eq!(sm.term, exp_term);
 		}
 	}
@@ -2388,35 +2388,34 @@ mod test {
 						npeers.insert(id, sm);
 					}
 					Some(mut p) => {
-						if p.raft.is_none() {
-							continue;
-						}
-						p.id = id;
-						let learner_prs = p.take_learner_prs();
-						p.learner_prs = HashMap::new();
-						p.prs = HashMap::new();
+						if p.raft.is_some() {
+							p.id = id;
+							let learner_prs = p.take_learner_prs();
+							p.learner_prs = HashMap::new();
+							p.prs = HashMap::new();
 
-						for i in &peer_addrs {
-							if learner_prs.contains_key(i) {
-								p.learner_prs.insert(
-									*i,
-									Progress {
-										is_learner: true,
-										..Default::default()
-									},
-								);
-							} else {
-								p.prs.insert(
-									*i,
-									Progress {
-										..Default::default()
-									},
-								);
+							for i in &peer_addrs {
+								if learner_prs.contains_key(i) {
+									p.learner_prs.insert(
+										*i,
+										Progress {
+											is_learner: true,
+											..Default::default()
+										},
+									);
+								} else {
+									p.prs.insert(
+										*i,
+										Progress {
+											..Default::default()
+										},
+									);
+								}
 							}
-						}
 
-						let term = p.term;
-						p.reset(term);
+							let term = p.term;
+							p.reset(term);
+						}
 						npeers.insert(id, p);
 					}
 				}
