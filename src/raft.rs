@@ -380,7 +380,7 @@ impl<T: Storage> Raft<T> {
 
 	// maybe_commit attempts to advance the commit index. Returns true if
 	// the commit index changed (in which case the caller should call
-	// self.bcastAppend).
+	// self.bcast_append).
 	fn maybe_commit(&mut self) -> bool {
 		let mut matched_indexs = Vec::with_capacity(self.prs.len());
 		for p in self.prs.values() {
@@ -1171,14 +1171,26 @@ impl<T: Storage> Raft<T> {
 					);
 					return Ok(());
 				}
+
 				let mut prs = self.take_prs();
 				let mut learner_prs = self.take_learner_prs();
+
+				let mut old_paused = false;
+				let mut maybe_commit = false;
+				let mut send_append = false;
+
 				if let Some(pr) = prs.get_mut(&msg.get_from())
 					.or_else(|| learner_prs.get_mut(&msg.get_from()))
 				{
 					match msg.get_msg_type() {
 						MessageType::MsgAppResp => {
-							self.handle_append_resp(pr, &msg);
+							self.handle_append_resp(
+								pr,
+								&msg,
+								&mut old_paused,
+								&mut maybe_commit,
+								&mut send_append,
+							);
 						}
 						MessageType::MsgHeartbeatResp => {
 							self.handle_heartbeat_resp(pr, &msg);
@@ -1197,6 +1209,31 @@ impl<T: Storage> Raft<T> {
 				}
 				self.set_prs(prs);
 				self.set_learner_prs(learner_prs);
+
+				if maybe_commit {
+					if self.maybe_commit() {
+						self.bcast_append();
+					} else if old_paused {
+						// update() reset the wait state on this node. If we had delayed sending
+						// an update before, send it now.
+						send_append = true;
+					}
+				}
+
+				if send_append {
+					let from = msg.get_from();
+					let mut prs = self.take_prs();
+					let mut learner_prs = self.take_learner_prs();
+					self.send_append(
+						from,
+						prs.get_mut(&from)
+							.or_else(|| learner_prs.get_mut(&from))
+							.unwrap(),
+					);
+					self.set_prs(prs);
+					self.set_learner_prs(learner_prs);
+				}
+
 				Ok(())
 			}
 		}
@@ -1345,7 +1382,14 @@ impl<T: Storage> Raft<T> {
 		}
 	}
 
-	fn handle_append_resp(&mut self, pr: &mut Progress, msg: &Message) {
+	fn handle_append_resp(
+		&mut self,
+		pr: &mut Progress,
+		msg: &Message,
+		old_paused: &mut bool,
+		maybe_commit: &mut bool,
+		send_append: &mut bool,
+	) {
 		pr.recent_active = true;
 		if msg.get_reject() {
 			debug!(
@@ -1368,38 +1412,35 @@ impl<T: Storage> Raft<T> {
 				if pr.state == ProgressState::Replicate {
 					pr.become_probe();
 				}
-				self.send_append(msg.get_from(), pr);
+				*send_append = true;
 			}
+			return;
+		}
+
+		*old_paused = pr.is_paused();
+		if !pr.maybe_update(msg.get_index()) {
+			return;
+		}
+
+		*maybe_commit = true;
+
+		if pr.state == ProgressState::Probe {
+			pr.become_replicate();
+		} else if pr.state == ProgressState::Snapshot && pr.need_snapshot_abort() {
+			pr.become_probe();
 		} else {
-			let old_paused = pr.is_paused();
-			if pr.maybe_update(msg.get_index()) {
-				if pr.state == ProgressState::Probe {
-					pr.become_replicate();
-				} else if pr.state == ProgressState::Snapshot && pr.need_snapshot_abort() {
-					pr.become_probe();
-				} else {
-					pr.ins.free_to(msg.get_index());
-				}
+			pr.ins.free_to(msg.get_index());
+		}
 
-				if self.maybe_commit() {
-					self.bcast_append();
-				} else if old_paused {
-					// update() reset the wait state on this node. If we had delayed sending
-					// an update before, send it now.
-					self.send_append(msg.get_from(), pr);
-				}
-
-				// Transfer leadership is in progress.
-				if msg.get_from() == self.lead_transferee {
-					info!(
-						"{} {} sent MsgTimeoutNow to {} after received MsgAppResp",
-						self.tag,
-						self.id,
-						msg.get_from(),
-					);
-					self.send_timeout_now(msg.get_from());
-				}
-			}
+		// Transfer leadership is in progress.
+		if msg.get_from() == self.lead_transferee {
+			info!(
+				"{} {} sent MsgTimeoutNow to {} after received MsgAppResp",
+				self.tag,
+				self.id,
+				msg.get_from(),
+			);
+			self.send_timeout_now(msg.get_from());
 		}
 	}
 
@@ -1968,12 +2009,6 @@ impl<T: Storage> Raft<T> {
 		}
 		self.msgs.push(msg);
 	}
-
-	fn read_message(&mut self) -> Vec<Message> {
-		let msgs = self.msgs.to_vec();
-		self.msgs.clear();
-		msgs
-	}
 }
 
 #[cfg(test)]
@@ -2183,11 +2218,64 @@ mod test {
 		r.step(m.clone()).is_ok();
 		r.step(m.clone()).is_ok();
 		r.step(m).is_ok();
-		assert_eq!(r.read_message().len(), 1);
+		assert_eq!(r.msgs.len(), 1);
 	}
 
 	#[test]
-	fn test_leader_election() {}
+	fn test_leader_election() {
+		leader_election(false);
+	}
+
+	#[test]
+	fn test_leader_election_pre_vote() {
+		leader_election(true);
+	}
+
+	fn leader_election(pre_vote: bool) {
+		let tests = vec![
+			(
+				Network::new_with_config(vec![None, None, None], pre_vote),
+				StateType::Leader,
+				1,
+			),
+			// (
+			// 	Network::new_with_config(vec![None, None, NOP_STEPPER], pre_vote),
+			// 	StateType::Leader,
+			// 	1,
+			// ),
+			// (
+			// 	Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER], pre_vote),
+			// 	StateType::Candidate,
+			// 	1,
+			// ),
+			// (
+			// 	Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER, None], pre_vote),
+			// 	StateType::Candidate,
+			// 	1,
+			// ),
+			// (
+			// 	Network::new_with_config(
+			// 		vec![None, NOP_STEPPER, NOP_STEPPER, None, None],
+			// 		pre_vote,
+			// 	),
+			// 	StateType::Leader,
+			// 	1,
+			// ),
+		];
+
+		for (mut network, state, exp_term) in tests {
+			network.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+			let sm = network.peers.get(&1).unwrap();
+			let (exp_state, exp_term) = if state == StateType::Candidate && pre_vote {
+				(StateType::Candidate, 0)
+			} else {
+				(state, exp_term)
+			};
+
+			assert_eq!(state, exp_state);
+			assert_eq!(sm.term, exp_term);
+		}
+	}
 
 	fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
 		let mut m = Message::new();
@@ -2236,6 +2324,8 @@ mod test {
 		ignorem: HashMap<MessageType, bool>,
 	}
 
+	const NOP_STEPPER: Option<StateMachine> = Some(StateMachine { raft: None });
+
 	#[derive(Default)]
 	struct StateMachine {
 		raft: Option<Raft<MemStorage>>,
@@ -2249,7 +2339,14 @@ mod test {
 		fn step(&mut self, m: Message) -> Result<()> {
 			match self.raft {
 				None => Ok(()),
-				Some(_) => self.step(m),
+				Some(_) => Raft::step(self, m),
+			}
+		}
+
+		pub fn read_messages(&mut self) -> Vec<Message> {
+			match self.raft {
+				Some(_) => self.msgs.drain(..).collect(),
+				None => vec![],
 			}
 		}
 	}
@@ -2291,6 +2388,9 @@ mod test {
 						npeers.insert(id, sm);
 					}
 					Some(mut p) => {
+						if p.raft.is_none() {
+							continue;
+						}
 						p.id = id;
 						let learner_prs = p.take_learner_prs();
 						p.learner_prs = HashMap::new();
@@ -2327,6 +2427,76 @@ mod test {
 				storage: nstorage,
 				..Default::default()
 			}
+		}
+
+		fn send(&mut self, msgs: Vec<Message>) {
+			let mut msgs = msgs;
+			while !msgs.is_empty() {
+				let mut new_msgs = vec![];
+				for m in msgs.drain(..) {
+					let resp = {
+						let p = self.peers.get_mut(&m.get_to()).unwrap();
+						let _ = p.step(m);
+						p.read_messages()
+					};
+					new_msgs.append(&mut self.filter(resp));
+				}
+				msgs.append(&mut new_msgs);
+			}
+		}
+
+		fn drop(&mut self, from: u64, to: u64, perc: f64) {
+			self.dropm.insert(Connem { from, to }, perc);
+		}
+
+		fn cut(&mut self, one: u64, other: u64) {
+			self.drop(one, other, 1.0);
+			self.drop(other, one, 1.0);
+		}
+
+		fn ignore(&mut self, msg_type: MessageType) {
+			self.ignorem.insert(msg_type, true);
+		}
+
+		fn isolate(&mut self, id: u64) {
+			for i in 0..self.peers.len() {
+				let nid = i as u64 + 1;
+				if nid != id {
+					self.drop(id, nid, 1.0);
+					self.drop(nid, id, 1.0);
+				}
+			}
+		}
+
+		fn filter(&self, msgs: Vec<Message>) -> Vec<Message> {
+			let mut mm = vec![];
+
+			for m in msgs {
+				if self.ignorem.contains_key(&m.get_msg_type()) {
+					continue;
+				}
+
+				match m.get_msg_type() {
+					MessageType::MsgHup => {
+						panic!("unexpected msgHup");
+					}
+					_ => {
+						let perc = self.dropm.get(&Connem {
+							from: m.get_from(),
+							to: m.get_to(),
+						});
+						if let Some(&perc) = perc {
+							let n: f64 = rand::thread_rng().gen_range(0f64, 1f64);
+							if n < perc {
+								continue;
+							}
+						}
+					}
+				}
+				mm.push(m);
+			}
+
+			mm
 		}
 	}
 }
