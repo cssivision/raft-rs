@@ -2358,6 +2358,51 @@ mod test {
 		assert_eq!(nt.peers[&2].state, StateType::Leader);
 	}
 
+	#[test]
+	fn test_learner_can_not_vote() {
+		let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, MemStorage::new());
+		n2.become_follower(1, NONE);
+		let mut m = new_message(1, 2, MessageType::MsgVote);
+		m.set_index(11);
+		m.set_log_term(11);
+		let _ = n2.step(m);
+		assert!(n2.msgs.is_empty());
+	}
+
+	#[test]
+	fn test_leader_cycle() {
+		leader_cycle(false);
+	}
+
+	#[test]
+	fn test_leader_cycle_pre_vote() {
+		leader_cycle(true);
+	}
+
+	// leader_cycle verifies that each node in a cluster can campaign
+	// and be elected in turn. This ensures that elections (including
+	// pre-vote) work when not starting from a clean slate (as they do in
+	// test_leader_election)
+	fn leader_cycle(pre_vote: bool) {
+		let mut n = Network::new_with_config(vec![None, None, None], pre_vote);
+
+		for campaigner_id in 1..4 {
+			n.send(vec![new_message(
+				campaigner_id,
+				campaigner_id,
+				MessageType::MsgHup,
+			)]);
+
+			for (_, peer) in &n.peers {
+				if peer.id == campaigner_id {
+					assert_eq!(peer.state, StateType::Leader);
+				} else {
+					assert_eq!(peer.state, StateType::Follower);
+				}
+			}
+		}
+	}
+
 	fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
 		let mut m = Message::new();
 		m.set_from(from);
