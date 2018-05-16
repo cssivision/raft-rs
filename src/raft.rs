@@ -1539,7 +1539,7 @@ impl<T: Storage> Raft<T> {
 					msg.get_from(),
 				);
 			}
-			_ => return Ok(()),
+			_ => {}
 		}
 
 		Ok(())
