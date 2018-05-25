@@ -304,6 +304,7 @@ impl<T: Storage> Raft<T> {
 				r.is_learner = true;
 			}
 		}
+
 		if hard_state != HardState::new() {
 			r.load_state(&hard_state);
 		}
@@ -478,13 +479,13 @@ impl<T: Storage> Raft<T> {
 		for (&id, pr) in &mut self.prs {
 			*pr = Progress::new(last_index + 1, max_inflight as usize, false);
 			if id == self_id {
-				pr.matched = self.raft_log.last_index();
+				pr.matched = last_index;
 			}
 		}
 		for (&id, pr) in &mut self.learner_prs {
 			*pr = Progress::new(last_index + 1, max_inflight as usize, true);
 			if id == self_id {
-				pr.matched = self.raft_log.last_index();
+				pr.matched = last_index;
 			}
 		}
 
@@ -706,7 +707,8 @@ impl<T: Storage> Raft<T> {
 				|| msg.get_msg_type() == MessageType::MsgPreVote
 			{
 				let force = msg.get_context() == CAMPAIGN_TRANSFER;
-				let in_lease = self.check_quorum && self.lead != NONE
+				let in_lease = self.check_quorum
+					&& self.lead != NONE
 					&& self.election_elapsed < self.election_timeout;
 
 				if !force && in_lease {
@@ -884,12 +886,14 @@ impl<T: Storage> Raft<T> {
 			// We can vote if this is a repeat of a vote we've already cast...
 			// ...we haven't voted and we don't think there's a leader yet in this term...
 			// ...or this is a PreVote for a future term...
-			let can_vote = self.vote == msg.get_from() || (self.vote == NONE && self.lead == NONE)
+			let can_vote = self.vote == msg.get_from()
+				|| (self.vote == NONE && self.lead == NONE)
 				|| (msg.get_msg_type() == MessageType::MsgPreVote && msg.get_term() > self.term);
 
 			// ...and we believe the candidate is up to date.
 			if can_vote
-				&& self.raft_log
+				&& self
+					.raft_log
 					.is_up_to_date(msg.get_index(), msg.get_log_term())
 			{
 				info!(
@@ -1121,7 +1125,8 @@ impl<T: Storage> Raft<T> {
 			}
 			MessageType::MsgReadIndex => {
 				if self.quorum() > 1 {
-					if self.raft_log
+					if self
+						.raft_log
 						.zero_term_on_err_compacted(self.raft_log.term(self.raft_log.committed))
 						!= self.term
 					{
@@ -1188,7 +1193,8 @@ impl<T: Storage> Raft<T> {
 				let mut more_to_send = None;
 				let quorum = quorum(prs.len()) as u64;
 
-				if let Some(pr) = prs.get_mut(&msg.get_from())
+				if let Some(pr) = prs
+					.get_mut(&msg.get_from())
 					.or_else(|| learner_prs.get_mut(&msg.get_from()))
 				{
 					match msg.get_msg_type() {
@@ -1515,6 +1521,7 @@ impl<T: Storage> Raft<T> {
 					msg.get_msg_type(),
 					self.votes.len() - granted,
 				);
+
 				if self.quorum() == granted {
 					if self.state == StateType::PreCandidate {
 						self.campaign(CAMPAIGN_ELECTION);
@@ -1522,7 +1529,7 @@ impl<T: Storage> Raft<T> {
 						self.become_leader();
 						self.bcast_append();
 					}
-				} else if self.votes.len() - granted == granted {
+				} else if self.votes.len() - granted == self.quorum() {
 					// MsgPreVoteResp contains future term of pre-candidate
 					// msg.term > self.term; reuse self.term
 					let term = self.term;
@@ -1792,7 +1799,8 @@ impl<T: Storage> Raft<T> {
 			return false;
 		}
 
-		if self.raft_log
+		if self
+			.raft_log
 			.match_term(s.get_metadata().get_index(), s.get_metadata().get_term())
 		{
 			info!(
@@ -1984,7 +1992,10 @@ impl<T: Storage> Raft<T> {
 		}
 
 		self.votes.entry(id).or_insert(v);
-		self.votes.iter().filter(|&(_, vv)| *vv).count()
+		println!("{:?}", self.votes);
+		let count = self.votes.values().filter(|v| **v).count();
+		println!("{:?}", self.votes);
+		count
 	}
 
 	fn quorum(&self) -> usize {
@@ -2379,6 +2390,92 @@ mod test {
 		leader_cycle(true);
 	}
 
+	#[test]
+	fn test_leader_election_overwrite_newer_logs() {
+		leader_election_overwrite_newer_logs(false);
+	}
+
+	// #[test]
+	// fn test_leader_election_overwrite_newer_logs_pre_vote() {
+	// 	leader_election_overwrite_newer_logs(true);
+	// }
+
+	fn ents_with_config(pre_vote: bool, terms: Vec<u64>) -> StateMachine {
+		let mut storage = MemStorage::new();
+		for (i, &term) in terms.iter().enumerate() {
+			let mut e = Entry::new();
+			e.set_index(i as u64 + 1);
+			e.set_term(term);
+			storage.append(&vec![e]).is_ok();
+		}
+
+		let mut cfg = new_test_config(1, vec![], 5, 1);
+		cfg.pre_vote = pre_vote;
+		let mut r = Raft::new(&mut cfg, storage);
+		r.reset(terms[terms.len() - 1]);
+		StateMachine::new(r)
+	}
+
+	fn vote_with_config(pre_vote: bool, vote: u64, term: u64) -> StateMachine {
+		let mut storage = MemStorage::new();
+		let mut hs = HardState::new();
+		hs.set_term(term);
+		hs.set_vote(vote);
+		storage.set_hard_state(hs);
+
+		let mut cfg = new_test_config(1, vec![], 5, 1);
+		cfg.pre_vote = pre_vote;
+		let mut r = Raft::new(&mut cfg, storage);
+		r.reset(term);
+		StateMachine::new(r)
+	}
+
+	fn leader_election_overwrite_newer_logs(pre_vote: bool) {
+		// This network represents the results of the following sequence of
+		// events:
+		// - Node 1 won the election in term 1.
+		// - Node 1 replicated a log entry to node 2 but died before sending
+		//   it to other nodes.
+		// - Node 3 won the second election in term 2.
+		// - Node 3 wrote an entry to its logs but died without sending it
+		//   to any other nodes.
+		//
+		// At this point, nodes 1, 2, and 3 all have uncommitted entries in
+		// their logs and could win an election at term 3. The winner's log
+		// entry overwrites the losers'. (TestLeaderSyncFollowerLog tests
+		// the case where older log entries are overwritten, so this test
+		// focuses on the case where the newer entries are lost).
+		let mut n = Network::new_with_config(
+			vec![
+				Some(ents_with_config(pre_vote, vec![1])),
+				Some(ents_with_config(pre_vote, vec![1])),
+				Some(ents_with_config(pre_vote, vec![2])),
+				Some(vote_with_config(pre_vote, 3, 2)),
+				Some(vote_with_config(pre_vote, 3, 2)),
+			],
+			pre_vote,
+		);
+
+		// Node 1 campaigns. The election fails because a quorum of nodes
+		// know about the election that already happened at term 2. Node 1's
+		// term is pushed ahead to 2.
+		n.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(n.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(n.peers.get(&1).unwrap().term, 2);
+
+		// Node 1 campaigns again with a higher term. This time it succeeds.
+		n.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(n.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(n.peers.get(&1).unwrap().term, 3);
+
+		for i in 1..n.peers.len() + 1 {
+			let entries = n.peers.get(&(i as u64)).unwrap().raft_log.all_entries();
+			assert_eq!(entries.len(), 2);
+			assert_eq!(entries[0].term, 1);
+			assert_eq!(entries[1].term, 3);
+		}
+	}
+
 	// leader_cycle verifies that each node in a cluster can campaign
 	// and be elected in turn. This ensures that elections (including
 	// pre-vote) work when not starting from a clean slate (as they do in
@@ -2570,6 +2667,7 @@ mod test {
 		fn send(&mut self, msgs: Vec<Message>) {
 			let mut msgs = msgs;
 			while !msgs.is_empty() {
+				println!("{:?}", msgs);
 				let mut new_msgs = vec![];
 				for m in msgs.drain(..) {
 					let resp = {

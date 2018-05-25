@@ -200,21 +200,22 @@ impl<T: Storage> RaftLog<T> {
 
         let mut ents = Vec::new();
         if lo < self.unstable.offset {
-            let sorted_ents =
-                match self.storage
-                    .entries(lo, cmp::min(hi, self.unstable.offset), max_size)
-                {
-                    Ok(ents) => ents,
-                    Err(e) => match e {
-                        Error::Storage(StorageError::Compacted) => {
-                            return Err(e);
-                        }
-                        Error::Storage(StorageError::Unavailable) => {
-                            panic!("entries[{}:{}) is unavailable from storage", lo, hi);
-                        }
-                        _ => panic!(e),
-                    },
-                };
+            let sorted_ents = match self.storage.entries(
+                lo,
+                cmp::min(hi, self.unstable.offset),
+                max_size,
+            ) {
+                Ok(ents) => ents,
+                Err(e) => match e {
+                    Error::Storage(StorageError::Compacted) => {
+                        return Err(e);
+                    }
+                    Error::Storage(StorageError::Unavailable) => {
+                        panic!("entries[{}:{}) is unavailable from storage", lo, hi);
+                    }
+                    _ => panic!(e),
+                },
+            };
 
             // check if has reached the size limitation
             if (sorted_ents.len() as u64) < cmp::min(hi, self.unstable.offset) - lo {
@@ -361,6 +362,17 @@ impl<T: Storage> RaftLog<T> {
 
     pub fn stable_snap_to(&mut self, index: u64) {
         self.unstable.stable_snap_to(index);
+    }
+
+    pub(crate) fn all_entries(&self) -> Vec<Entry> {
+        let ents = self.entries(self.first_index(), NO_LIMIT);
+        match ents {
+            Ok(ents) => ents,
+            Err(err) => match err {
+                Error::Storage(StorageError::Compacted) => self.all_entries(),
+                _ => panic!(err),
+            },
+        }
     }
 }
 
