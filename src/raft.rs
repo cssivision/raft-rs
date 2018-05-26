@@ -2447,11 +2447,11 @@ mod test {
 		// focuses on the case where the newer entries are lost).
 		let mut n = Network::new_with_config(
 			vec![
-				Some(ents_with_config(pre_vote, vec![1])),
-				Some(ents_with_config(pre_vote, vec![1])),
-				Some(ents_with_config(pre_vote, vec![2])),
-				Some(vote_with_config(pre_vote, 3, 2)),
-				Some(vote_with_config(pre_vote, 3, 2)),
+				Some(ents_with_config(pre_vote, vec![1])), // Node 1: Won first election
+				Some(ents_with_config(pre_vote, vec![1])), // Node 2: Got logs from node 1
+				Some(ents_with_config(pre_vote, vec![2])), // Node 3: Won second election
+				Some(vote_with_config(pre_vote, 3, 2)),    // Node 4: Voted but didn't get logs
+				Some(vote_with_config(pre_vote, 3, 2)),    // Node 5: Voted but didn't get logs
 			],
 			pre_vote,
 		);
@@ -2468,11 +2468,75 @@ mod test {
 		assert_eq!(n.peers.get(&1).unwrap().state, StateType::Leader);
 		assert_eq!(n.peers.get(&1).unwrap().term, 3);
 
+		// Now all nodes agree on a log entry with term 1 at index 1 (and
+		// term 3 at index 2).
 		for i in 1..n.peers.len() + 1 {
 			let entries = n.peers.get(&(i as u64)).unwrap().raft_log.all_entries();
 			assert_eq!(entries.len(), 2);
 			assert_eq!(entries[0].term, 1);
 			assert_eq!(entries[1].term, 3);
+		}
+	}
+
+	fn test_vote_from_any_state() {
+		vote_from_any_state(MessageType::MsgVote);
+	}
+
+	fn test_pre_vote_from_any_state() {
+		vote_from_any_state(MessageType::MsgPreVote);
+	}
+
+	fn vote_from_any_state(vt: MessageType) {
+		for st in vec![
+			StateType::Follower,
+			StateType::Candidate,
+			StateType::PreCandidate,
+			StateType::Leader,
+		] {
+			let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+			r.term = 1;
+			let term = r.term;
+			match st {
+				StateType::Follower => {
+					r.become_follower(term, 3);
+				}
+				StateType::PreCandidate => {
+					r.become_pre_candidate();
+				}
+				StateType::Candidate => {
+					r.become_candidate();
+				}
+				StateType::Leader => {
+					r.become_candidate();
+					r.become_leader();
+				}
+			}
+
+			let orig_term = r.term;
+			let new_term = r.term + 1;
+
+			let mut msg = Message::new();
+			msg.set_from(2);
+			msg.set_to(1);
+			msg.set_msg_type(vt);
+			msg.set_term(new_term);
+			msg.set_log_term(orig_term);
+			msg.set_index(42);
+			assert!(r.step(msg).is_ok());
+			assert_eq!(r.msgs.len(), 1);
+			let resp = &r.msgs[0];
+			assert_eq!(resp.get_msg_type(), vote_msg_resp_type(vt));
+			assert!(!resp.get_reject());
+
+			if vt == MessageType::MsgVote {
+				assert_eq!(r.state, StateType::Follower);
+				assert_eq!(r.term, new_term);
+				assert_eq!(r.vote, 2);
+			} else {
+				assert_eq!(r.state, st);
+				assert_eq!(r.term, orig_term);
+				assert_eq!(r.vote, 2);
+			}
 		}
 	}
 
