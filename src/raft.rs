@@ -2395,10 +2395,10 @@ mod test {
 		leader_election_overwrite_newer_logs(false);
 	}
 
-	// #[test]
-	// fn test_leader_election_overwrite_newer_logs_pre_vote() {
-	// 	leader_election_overwrite_newer_logs(true);
-	// }
+	#[test]
+	fn test_leader_election_overwrite_newer_logs_pre_vote() {
+		leader_election_overwrite_newer_logs(true);
+	}
 
 	fn ents_with_config(pre_vote: bool, terms: Vec<u64>) -> StateMachine {
 		let mut storage = MemStorage::new();
@@ -2478,10 +2478,12 @@ mod test {
 		}
 	}
 
+	#[test]
 	fn test_vote_from_any_state() {
 		vote_from_any_state(MessageType::MsgVote);
 	}
 
+	#[test]
 	fn test_pre_vote_from_any_state() {
 		vote_from_any_state(MessageType::MsgPreVote);
 	}
@@ -2535,7 +2537,7 @@ mod test {
 			} else {
 				assert_eq!(r.state, st);
 				assert_eq!(r.term, orig_term);
-				assert_eq!(r.vote, 2);
+				assert!(r.vote == NONE || r.vote == 1);
 			}
 		}
 	}
