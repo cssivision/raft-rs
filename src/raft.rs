@@ -1992,9 +1992,7 @@ impl<T: Storage> Raft<T> {
 		}
 
 		self.votes.entry(id).or_insert(v);
-		println!("{:?}", self.votes);
 		let count = self.votes.values().filter(|v| **v).count();
-		println!("{:?}", self.votes);
 		count
 	}
 
@@ -2390,6 +2388,30 @@ mod test {
 		leader_cycle(true);
 	}
 
+	// leader_cycle verifies that each node in a cluster can campaign
+	// and be elected in turn. This ensures that elections (including
+	// pre-vote) work when not starting from a clean slate (as they do in
+	// test_leader_election)
+	fn leader_cycle(pre_vote: bool) {
+		let mut n = Network::new_with_config(vec![None, None, None], pre_vote);
+
+		for campaigner_id in 1..4 {
+			n.send(vec![new_message(
+				campaigner_id,
+				campaigner_id,
+				MessageType::MsgHup,
+			)]);
+
+			for (_, peer) in &n.peers {
+				if peer.id == campaigner_id {
+					assert_eq!(peer.state, StateType::Leader);
+				} else {
+					assert_eq!(peer.state, StateType::Follower);
+				}
+			}
+		}
+	}
+
 	#[test]
 	fn test_leader_election_overwrite_newer_logs() {
 		leader_election_overwrite_newer_logs(false);
@@ -2542,28 +2564,92 @@ mod test {
 		}
 	}
 
-	// leader_cycle verifies that each node in a cluster can campaign
-	// and be elected in turn. This ensures that elections (including
-	// pre-vote) work when not starting from a clean slate (as they do in
-	// test_leader_election)
-	fn leader_cycle(pre_vote: bool) {
-		let mut n = Network::new_with_config(vec![None, None, None], pre_vote);
+	#[test]
+	fn test_log_replication() {
+		let tests = vec![
+			(
+				Network::new(vec![None, None, None]),
+				vec![new_message_with_entries(
+					1,
+					1,
+					MessageType::MsgProp,
+					vec![new_entry_with_data(Vec::from("somedata"))],
+				)],
+				2,
+			),
+			(
+				Network::new(vec![None, None, None]),
+				vec![
+					new_message_with_entries(
+						1,
+						1,
+						MessageType::MsgProp,
+						vec![new_entry_with_data(Vec::from("somedata"))],
+					),
+					new_message(1, 2, MessageType::MsgHup),
+					new_message_with_entries(
+						1,
+						2,
+						MessageType::MsgProp,
+						vec![new_entry_with_data(Vec::from("somedata"))],
+					),
+				],
+				4,
+			),
+		];
 
-		for campaigner_id in 1..4 {
-			n.send(vec![new_message(
-				campaigner_id,
-				campaigner_id,
-				MessageType::MsgHup,
-			)]);
+		for (mut network, msgs, wcommitted) in tests {
+			network.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+			let mut props_data = vec![];
+			for m in msgs {
+				if m.get_msg_type() == MessageType::MsgProp {
+					props_data.push(m.get_entries()[0].get_data().to_vec());
+				}
+				network.send(vec![m]);
+			}
 
-			for (_, peer) in &n.peers {
-				if peer.id == campaigner_id {
-					assert_eq!(peer.state, StateType::Leader);
-				} else {
-					assert_eq!(peer.state, StateType::Follower);
+			for (j, mut sm) in network.peers {
+				assert_eq!(sm.raft_log.committed, wcommitted);
+
+				let mut ents = vec![];
+				for e in next_ents(&mut sm, network.storage.get_mut(&j).unwrap()) {
+					if !e.get_data().is_empty() {
+						ents.push(e);
+					}
+				}
+
+				for k in 0..props_data.len() {
+					assert_eq!(props_data[0], ents[k].get_data());
 				}
 			}
 		}
+	}
+
+	fn next_ents(sm: &mut StateMachine, s: &mut MemStorage) -> Vec<Entry> {
+		let _ = s.append(&sm.raft_log.unstable_entries());
+		let (last_index, last_term) = (sm.raft_log.last_index(), sm.raft_log.last_term());
+		sm.raft_log.stable_to(last_index, last_term);
+		let ents = sm.raft_log.next_ents();
+		let committed = sm.raft_log.committed;
+		sm.raft_log.applied_to(committed);
+		ents
+	}
+
+	fn new_entry_with_data(data: Vec<u8>) -> Entry {
+		let mut e = Entry::new();
+		e.set_data(data);
+		e
+	}
+
+	fn new_message_with_entries(
+		from: u64,
+		to: u64,
+		msg_type: MessageType,
+		entries: Vec<Entry>,
+	) -> Message {
+		let mut msg = new_message(from, to, msg_type);
+		msg.set_entries(RepeatedField::from_vec(entries));
+		msg
 	}
 
 	fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
@@ -2733,7 +2819,6 @@ mod test {
 		fn send(&mut self, msgs: Vec<Message>) {
 			let mut msgs = msgs;
 			while !msgs.is_empty() {
-				println!("{:?}", msgs);
 				let mut new_msgs = vec![];
 				for m in msgs.drain(..) {
 					let resp = {
