@@ -2625,6 +2625,49 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_learner_log_replication() {
+		let n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, MemStorage::new());
+		let n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, MemStorage::new());
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(n1)),
+			Some(StateMachine::new(n2)),
+		]);
+
+		nt.peers.get_mut(&1).unwrap().become_follower(1, NONE);
+		nt.peers.get_mut(&2).unwrap().become_follower(1, NONE);
+
+		let election_timeout = nt.peers[&1].election_timeout;
+		nt.peers.get_mut(&1).unwrap().randomized_election_timeout = election_timeout;
+		for _ in 0..election_timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		assert_eq!(StateType::Leader, nt.peers.get(&1).unwrap().state);
+		assert!(nt.peers.get(&2).unwrap().is_learner);
+
+		let next_committed = nt.peers.get(&1).unwrap().raft_log.committed + 1;
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		assert_eq!(next_committed, nt.peers.get(&1).unwrap().raft_log.committed);
+		assert_eq!(
+			nt.peers.get(&1).unwrap().raft_log.committed,
+			nt.peers.get(&2).unwrap().raft_log.committed
+		);
+
+		assert_eq!(
+			nt.peers.get(&2).unwrap().raft_log.committed,
+			nt.peers.get(&1).unwrap().get_progress(2).unwrap().matched,
+		)
+	}
+
 	fn next_ents(sm: &mut StateMachine, s: &mut MemStorage) -> Vec<Entry> {
 		let _ = s.append(&sm.raft_log.unstable_entries());
 		let (last_index, last_term) = (sm.raft_log.last_index(), sm.raft_log.last_term());
