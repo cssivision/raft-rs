@@ -2678,6 +2678,26 @@ mod test {
 		ents
 	}
 
+	#[test]
+	fn test_single_node_committed() {
+		let mut tt = Network::new(vec![None]);
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		tt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+		tt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		assert_eq!(tt.peers.get(&1).unwrap().raft_log.committed, 3);
+	}
+
 	fn new_entry_with_data(data: Vec<u8>) -> Entry {
 		let mut e = Entry::new();
 		e.set_data(data);
