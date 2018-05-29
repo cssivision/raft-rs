@@ -1230,7 +1230,6 @@ impl<T: Storage> Raft<T> {
 				}
 				self.set_prs(prs);
 				self.set_learner_prs(learner_prs);
-
 				if maybe_commit {
 					if self.maybe_commit() {
 						self.bcast_append();
@@ -2698,6 +2697,80 @@ mod test {
 		assert_eq!(tt.peers.get(&1).unwrap().raft_log.committed, 3);
 	}
 
+	#[test]
+	fn test_can_not_commit_without_new_term_entry() {
+		let mut tt = Network::new(vec![None, None, None, None, None]);
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		tt.cut(1, 3);
+		tt.cut(1, 4);
+		tt.cut(1, 5);
+
+		tt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		tt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		assert_eq!(tt.peers.get(&1).unwrap().raft_log.committed, 1);
+
+		tt.recover();
+		tt.ignore(MessageType::MsgApp);
+
+		tt.send(vec![new_message(2, 2, MessageType::MsgHup)]);
+		assert_eq!(tt.peers.get(&2).unwrap().raft_log.committed, 1);
+
+		tt.recover();
+		tt.send(vec![new_message(2, 2, MessageType::MsgBeat)]);
+		tt.send(vec![new_message_with_entries(
+			2,
+			2,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		assert_eq!(tt.peers.get(&2).unwrap().raft_log.committed, 5);
+	}
+
+	#[test]
+	fn test_commit_without_new_term_entry() {
+		let mut tt = Network::new(vec![None, None, None, None, None]);
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		tt.cut(1, 3);
+		tt.cut(1, 4);
+		tt.cut(1, 5);
+
+		tt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		tt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		assert_eq!(tt.peers.get(&1).unwrap().raft_log.committed, 1);
+
+		tt.recover();
+
+		tt.send(vec![new_message(2, 2, MessageType::MsgHup)]);
+		assert_eq!(tt.peers.get(&2).unwrap().raft_log.committed, 4);
+	}
+
 	fn new_entry_with_data(data: Vec<u8>) -> Entry {
 		let mut e = Entry::new();
 		e.set_data(data);
@@ -2900,12 +2973,17 @@ mod test {
 		}
 
 		fn cut(&mut self, one: u64, other: u64) {
-			self.drop(one, other, 1.0);
-			self.drop(other, one, 1.0);
+			self.drop(one, other, 2.0);
+			self.drop(other, one, 2.0);
 		}
 
 		fn ignore(&mut self, msg_type: MessageType) {
 			self.ignorem.insert(msg_type, true);
+		}
+
+		fn recover(&mut self) {
+			self.ignorem.clear();
+			self.dropm.clear();
 		}
 
 		fn isolate(&mut self, id: u64) {
