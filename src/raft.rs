@@ -2932,6 +2932,22 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_single_node_candidate() {
+		let mut tt = Network::new(vec![None]);
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		assert_eq!(tt.peers.get(&1).unwrap().state, StateType::Leader);
+	}
+
+	#[test]
+	fn test_single_node_pre_candidate() {
+		let mut tt = Network::new_with_config(vec![None], true);
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		assert_eq!(tt.peers.get(&1).unwrap().state, StateType::Leader);
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
