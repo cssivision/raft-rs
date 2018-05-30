@@ -2887,6 +2887,51 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_candidate_concede() {
+		let mut tt = Network::new(vec![None, None, None]);
+		tt.isolate(1);
+
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		tt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		tt.recover();
+
+		tt.send(vec![new_message(3, 3, MessageType::MsgBeat)]);
+
+		let data: Vec<u8> = Vec::from("force follower");
+
+		tt.send(vec![new_message_with_entries(
+			3,
+			3,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(data.clone())],
+		)]);
+
+		tt.send(vec![new_message(3, 3, MessageType::MsgBeat)]);
+
+		assert_eq!(tt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(tt.peers.get(&1).unwrap().term, 1);
+
+		let mut s = MemStorage::new();
+		let mut e2 = new_entry(1, 2);
+		e2.set_data(data.clone());
+		let _ = s.append(&vec![new_entry(1, 1), e2]);
+
+		use log_unstable::Unstable;
+		let us = Unstable::new(3, String::default());
+		let wlog = RaftLog {
+			storage: s,
+			committed: 2,
+			unstable: us,
+			..Default::default()
+		};
+
+		for (_, p) in tt.peers {
+			assert_eq!(ltoa(&p.raft_log), ltoa(&wlog));
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
