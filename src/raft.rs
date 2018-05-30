@@ -2826,6 +2826,67 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_dueling_pre_candidates() {
+		let mut cfg_a = new_test_config(1, vec![1, 2, 3], 10, 1);
+		let mut cfg_b = new_test_config(1, vec![1, 2, 3], 10, 1);
+		let mut cfg_c = new_test_config(1, vec![1, 2, 3], 10, 1);
+		cfg_a.pre_vote = true;
+		cfg_b.pre_vote = true;
+		cfg_c.pre_vote = true;
+
+		let a = Raft::new(&mut cfg_a, MemStorage::new());
+		let b = Raft::new(&mut cfg_b, MemStorage::new());
+		let c = Raft::new(&mut cfg_c, MemStorage::new());
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(a)),
+			Some(StateMachine::new(b)),
+			Some(StateMachine::new(c)),
+		]);
+
+		nt.cut(1, 3);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		// 1 becomes leader since it receives votes from 1 and 2
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		// 3 stays as candidate since it receives a vote from 3 and a rejection from 2
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::Follower);
+
+		nt.recover();
+
+		// Candidate 3 now increases its term and tries to vote again.
+		// With PreVote, it does not disrupt the leader.
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		let mut s = MemStorage::new();
+		let _ = s.append(&vec![new_entry(1, 1)]);
+
+		use log_unstable::Unstable;
+		let us = Unstable::new(2, String::default());
+		let wlog = RaftLog {
+			storage: s,
+			committed: 1,
+			unstable: us,
+			..Default::default()
+		};
+
+		let rl = RaftLog::new(MemStorage::new(), String::default());
+		let tests = vec![
+			(nt.peers.get(&1).unwrap(), StateType::Leader, 1, &wlog),
+			(nt.peers.get(&2).unwrap(), StateType::Follower, 1, &wlog),
+			(nt.peers.get(&3).unwrap(), StateType::Follower, 1, &rl),
+		];
+
+		for (sm, state, term, rl) in tests {
+			assert_eq!(sm.state, state);
+			assert_eq!(sm.term, term);
+
+			assert_eq!(ltoa(rl), ltoa(&sm.raft_log));
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
