@@ -2771,6 +2771,77 @@ mod test {
 		assert_eq!(tt.peers.get(&2).unwrap().raft_log.committed, 4);
 	}
 
+	#[test]
+	fn test_dueling_candidates() {
+		let a = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let b = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let c = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(a)),
+			Some(StateMachine::new(b)),
+			Some(StateMachine::new(c)),
+		]);
+
+		nt.cut(1, 3);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		// 1 becomes leader since it receives votes from 1 and 2
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		// 3 stays as candidate since it receives a vote from 3 and a rejection from 2
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::Candidate);
+
+		nt.recover();
+
+		// candidate 3 now increases its term and tries to vote again
+		// we expect it to disrupt the leader 1 since it has a higher term
+		// 3 will be follower again since both 1 and 2 rejects its vote request since 3 does not have a long enough log
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		let mut s = MemStorage::new();
+		let _ = s.append(&vec![new_entry(1, 1)]);
+
+		use log_unstable::Unstable;
+		let us = Unstable::new(2, String::default());
+		let wlog = RaftLog {
+			storage: s,
+			committed: 1,
+			unstable: us,
+			..Default::default()
+		};
+
+		let rl = RaftLog::new(MemStorage::new(), String::default());
+		let tests = vec![
+			(nt.peers.get(&1).unwrap(), StateType::Follower, 2, &wlog),
+			(nt.peers.get(&2).unwrap(), StateType::Follower, 2, &wlog),
+			(nt.peers.get(&3).unwrap(), StateType::Follower, 2, &rl),
+		];
+
+		for (sm, state, term, rl) in tests {
+			assert_eq!(sm.state, state);
+			assert_eq!(sm.term, term);
+
+			assert_eq!(ltoa(rl), ltoa(&sm.raft_log));
+		}
+	}
+
+	fn new_entry(term: u64, index: u64) -> Entry {
+		let mut e = Entry::new();
+		e.set_index(index);
+		e.set_term(term);
+		e
+	}
+
+	fn ltoa<T: Storage>(l: &RaftLog<T>) -> String {
+		let mut s = format!("committed: {}\n", l.committed);
+		s.push_str(&format!("applied:  {}\n", l.applied));
+		for (i, e) in l.all_entries().iter().enumerate() {
+			s.push_str(&format!("#{}: {:?}\n", i, e));
+		}
+		s
+	}
+
 	fn new_entry_with_data(data: Vec<u8>) -> Entry {
 		let mut e = Entry::new();
 		e.set_data(data);

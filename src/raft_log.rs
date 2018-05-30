@@ -25,7 +25,7 @@ pub struct RaftLog<T: Storage> {
     pub applied: u64,
 
     /// tag only used for logger.
-    tag: String,
+    pub tag: String,
 }
 
 impl<T: Storage> ToString for RaftLog<T> {
