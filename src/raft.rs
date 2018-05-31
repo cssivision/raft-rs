@@ -237,6 +237,10 @@ pub struct Raft<T: Storage> {
 
 	/// tag only used for logger.
 	tag: String,
+
+	/// Will be called when step** is about to be called.
+	/// return false will skip step**.
+	pub before_step_state: Option<Box<FnMut(&Message) -> bool>>,
 }
 
 impl<T: Storage> Raft<T> {
@@ -288,6 +292,7 @@ impl<T: Storage> Raft<T> {
 			randomized_election_timeout: Default::default(),
 			tag: c.tag.clone(),
 			disable_proposal_forwarding: c.disable_proposal_forwarding,
+			before_step_state: None,
 		};
 
 		for &p in peers {
@@ -3167,6 +3172,19 @@ mod test {
 			}
 			assert_eq!(got, wprobability);
 		}
+	}
+
+	#[test]
+	fn test_step_ignore_old_term_msg() {
+		let mut sm = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+		sm.before_step_state = Some(Box::new(|_: &Message| {
+			panic!("before step state function hook called unexpectedly")
+		}));
+		sm.term = 2;
+		let mut m = Message::new();
+		m.set_msg_type(MessageType::MsgApp);
+		m.set_term(1);
+		sm.step(m).unwrap();
 	}
 
 	fn new_entry(term: u64, index: u64) -> Entry {
