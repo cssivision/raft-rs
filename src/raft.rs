@@ -3139,6 +3139,36 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_past_election_timeout() {
+		let tests = vec![
+			(5, 0.0, false),
+			(10, 0.1, true),
+			(13, 0.4, true),
+			(15, 0.6, true),
+			(18, 0.9, true),
+			(20, 1.0, false),
+		];
+
+		for (elapse, wprobability, round) in tests {
+			let mut sm = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+			sm.election_elapsed = elapse;
+			let mut c = 0;
+			for _ in 0..10000 {
+				sm.reset_randomized_election_timeout();
+				if sm.past_election_timeout() {
+					c += 1;
+				}
+			}
+
+			let mut got = c as f64 / 10000.0;
+			if round {
+				got = (got * 10.0 + 0.5).floor() / 10.0;
+			}
+			assert_eq!(got, wprobability);
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
