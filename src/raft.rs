@@ -3070,6 +3070,75 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_commit() {
+		let tests = vec![
+			// single
+			(vec![1], vec![new_entry(1, 1)], 1, 1),
+			(vec![1], vec![new_entry(1, 1)], 2, 0),
+			(vec![2], vec![new_entry(1, 1), new_entry(2, 2)], 2, 2),
+			(vec![1], vec![new_entry(2, 1)], 2, 1),
+			// old
+			(vec![2, 1, 1], vec![new_entry(1, 1), new_entry(2, 2)], 1, 1),
+			(vec![2, 1, 1], vec![new_entry(1, 1), new_entry(1, 2)], 2, 0),
+			(vec![2, 1, 2], vec![new_entry(1, 1), new_entry(2, 2)], 2, 2),
+			(vec![2, 1, 2], vec![new_entry(1, 1), new_entry(1, 2)], 2, 0),
+			// even
+			(
+				vec![2, 1, 1, 1],
+				vec![new_entry(1, 1), new_entry(2, 2)],
+				1,
+				1,
+			),
+			(
+				vec![2, 1, 1, 1],
+				vec![new_entry(1, 1), new_entry(1, 2)],
+				2,
+				0,
+			),
+			(
+				vec![2, 1, 1, 2],
+				vec![new_entry(1, 1), new_entry(2, 2)],
+				1,
+				1,
+			),
+			(
+				vec![2, 1, 1, 2],
+				vec![new_entry(1, 1), new_entry(1, 2)],
+				2,
+				0,
+			),
+			(
+				vec![2, 1, 2, 2],
+				vec![new_entry(1, 1), new_entry(2, 2)],
+				2,
+				2,
+			),
+			(
+				vec![2, 1, 2, 2],
+				vec![new_entry(1, 1), new_entry(1, 2)],
+				2,
+				0,
+			),
+		];
+
+		for (matches, logs, term, w) in tests {
+			let mut storage = MemStorage::new();
+			let _ = storage.append(&logs);
+			let mut hs = HardState::new();
+			hs.set_term(term);
+			storage.set_hard_state(hs);
+
+			let mut sm = new_test_raft(1, vec![1], 10, 2, storage);
+			for j in 0..matches.len() {
+				sm.set_progress(j as u64 + 1, matches[j], matches[j] + 1, false);
+			}
+
+			sm.maybe_commit();
+			assert_eq!(sm.raft_log.committed, w);
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);

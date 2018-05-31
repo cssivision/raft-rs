@@ -9,7 +9,7 @@ description = "raft implementation in rust."
 readme = "README.md"
 
 [dependencies]
-protobuf = "1.4"
+protobuf = "1.7"
 log = "0.4"
 rand = "0.4"
 quick-error = "1.2"
