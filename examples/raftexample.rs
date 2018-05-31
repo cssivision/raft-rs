@@ -1,4 +1,3 @@
-extern crate craft as raft;
+extern crate libraft;
 
-fn main() {
-}
+fn main() {}

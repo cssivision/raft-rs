@@ -2052,6 +2052,7 @@ mod test {
 	use std::ops::Deref;
 	use std::ops::DerefMut;
 
+	use log_unstable::Unstable;
 	use progress::Inflights;
 	use storage::MemStorage;
 
@@ -2802,7 +2803,6 @@ mod test {
 		let mut s = MemStorage::new();
 		let _ = s.append(&vec![new_entry(1, 1)]);
 
-		use log_unstable::Unstable;
 		let us = Unstable::new(2, String::default());
 		let wlog = RaftLog {
 			storage: s,
@@ -2863,7 +2863,6 @@ mod test {
 		let mut s = MemStorage::new();
 		let _ = s.append(&vec![new_entry(1, 1)]);
 
-		use log_unstable::Unstable;
 		let wlog = RaftLog {
 			storage: s,
 			committed: 1,
@@ -2969,7 +2968,6 @@ mod test {
 		e.set_data(Vec::from("somedata"));
 		let _ = s.append(&vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3), e]);
 
-		use log_unstable::Unstable;
 		let wlog = RaftLog {
 			storage: s,
 			committed: 4,
@@ -2979,6 +2977,57 @@ mod test {
 
 		for (_, p) in tt.peers {
 			assert_eq!(ltoa(&p.raft_log), ltoa(&wlog));
+		}
+	}
+
+	#[test]
+	fn test_proposal() {
+		let tests = vec![
+			(Network::new(vec![None, None, None]), true),
+			(Network::new(vec![None, None, NOP_STEPPER]), true),
+			(Network::new(vec![None, NOP_STEPPER, NOP_STEPPER]), false),
+			(
+				Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None]),
+				false,
+			),
+			(
+				Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None, None]),
+				true,
+			),
+		];
+
+		let data: Vec<u8> = Vec::from("somedata");
+		for (mut nt, sucsess) in tests {
+			nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+			nt.send(vec![new_message_with_entries(
+				1,
+				1,
+				MessageType::MsgProp,
+				vec![new_entry_with_data(data.clone())],
+			)]);
+
+			let mut wlog = RaftLog::new(MemStorage::new(), String::default());
+			if sucsess {
+				let mut s = MemStorage::new();
+				let mut e = new_entry(1, 2);
+				e.set_data(data.clone());
+				let _ = s.append(&vec![new_entry(1, 1), e]);
+
+				wlog = RaftLog {
+					storage: s,
+					committed: 2,
+					unstable: Unstable::new(3, String::default()),
+					..Default::default()
+				};
+			}
+
+			for (_, p) in &nt.peers {
+				if p.raft.is_some() {
+					assert_eq!(ltoa(&p.raft_log), ltoa(&wlog));
+				}
+			}
+
+			assert_eq!(nt.peers.get(&1).unwrap().term, 1);
 		}
 	}
 
