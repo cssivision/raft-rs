@@ -3031,6 +3031,45 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_proposal_by_proxy() {
+		let data: Vec<u8> = Vec::from("somedata");
+		let tests = vec![
+			Network::new(vec![None, None, None]),
+			Network::new(vec![None, None, NOP_STEPPER]),
+		];
+
+		for mut tt in tests {
+			tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+			tt.send(vec![new_message_with_entries(
+				2,
+				2,
+				MessageType::MsgProp,
+				vec![new_entry_with_data(data.clone())],
+			)]);
+
+			let mut s = MemStorage::new();
+			let mut e = new_entry(1, 2);
+			e.set_data(data.clone());
+			let _ = s.append(&vec![new_entry(1, 1), e]);
+
+			let wlog = RaftLog {
+				storage: s,
+				committed: 2,
+				unstable: Unstable::new(3, String::default()),
+				..Default::default()
+			};
+
+			for (_, p) in &tt.peers {
+				if p.raft.is_some() {
+					assert_eq!(ltoa(&p.raft_log), ltoa(&wlog));
+				}
+			}
+
+			assert_eq!(tt.peers.get(&1).unwrap().term, 1);
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
