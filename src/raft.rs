@@ -2864,11 +2864,10 @@ mod test {
 		let _ = s.append(&vec![new_entry(1, 1)]);
 
 		use log_unstable::Unstable;
-		let us = Unstable::new(2, String::default());
 		let wlog = RaftLog {
 			storage: s,
 			committed: 1,
-			unstable: us,
+			unstable: Unstable::new(2, String::default()),
 			..Default::default()
 		};
 
@@ -2919,11 +2918,10 @@ mod test {
 		let _ = s.append(&vec![new_entry(1, 1), e2]);
 
 		use log_unstable::Unstable;
-		let us = Unstable::new(3, String::default());
 		let wlog = RaftLog {
 			storage: s,
 			committed: 2,
-			unstable: us,
+			unstable: Unstable::new(3, String::default()),
 			..Default::default()
 		};
 
@@ -2946,6 +2944,42 @@ mod test {
 		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
 
 		assert_eq!(tt.peers.get(&1).unwrap().state, StateType::Leader);
+	}
+
+	#[test]
+	fn test_old_message() {
+		let mut tt = Network::new(vec![None, None, None]);
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		tt.send(vec![new_message(2, 2, MessageType::MsgHup)]);
+		tt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		let mut m = new_message_with_entries(2, 1, MessageType::MsgApp, vec![new_entry(2, 3)]);
+		m.set_term(2);
+		tt.send(vec![m]);
+
+		tt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somedata"))],
+		)]);
+
+		let mut s = MemStorage::new();
+		let mut e = new_entry(3, 4);
+		e.set_data(Vec::from("somedata"));
+		let _ = s.append(&vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3), e]);
+
+		use log_unstable::Unstable;
+		let wlog = RaftLog {
+			storage: s,
+			committed: 4,
+			unstable: Unstable::new(5, String::default()),
+			..Default::default()
+		};
+
+		for (_, p) in tt.peers {
+			assert_eq!(ltoa(&p.raft_log), ltoa(&wlog));
+		}
 	}
 
 	fn new_entry(term: u64, index: u64) -> Entry {
