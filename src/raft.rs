@@ -3187,6 +3187,99 @@ mod test {
 		sm.step(m).unwrap();
 	}
 
+	#[test]
+	fn test_handle_msg_app() {
+		let tests = vec![
+			(
+				new_append_message_with_entries(2, 3, 2, 3, vec![]),
+				2,
+				0,
+				true,
+			),
+			(
+				new_append_message_with_entries(2, 3, 3, 3, vec![]),
+				2,
+				0,
+				true,
+			),
+			(
+				new_append_message_with_entries(2, 1, 1, 1, vec![]),
+				2,
+				1,
+				false,
+			),
+			(
+				new_append_message_with_entries(2, 0, 0, 1, vec![new_entry(2, 1)]),
+				1,
+				1,
+				false,
+			),
+			(
+				new_append_message_with_entries(2, 2, 2, 3, vec![new_entry(2, 3), new_entry(2, 4)]),
+				4,
+				3,
+				false,
+			),
+			(
+				new_append_message_with_entries(2, 2, 2, 4, vec![new_entry(2, 3)]),
+				3,
+				3,
+				false,
+			),
+			(
+				new_append_message_with_entries(2, 1, 1, 4, vec![new_entry(2, 2)]),
+				2,
+				2,
+				false,
+			),
+			(
+				new_append_message_with_entries(2, 2, 2, 3, vec![]),
+				2,
+				2,
+				false,
+			),
+			(
+				new_append_message_with_entries(2, 2, 2, 4, vec![]),
+				2,
+				2,
+				false,
+			),
+		];
+
+		for (m, windex, wcommit, wreject) in tests {
+			let mut s = MemStorage::new();
+			let _ = s.append(&vec![new_entry(1, 1), new_entry(2, 2)]);
+			let mut sm = new_test_raft(1, vec![1], 10, 1, s);
+			sm.become_follower(2, NONE);
+
+			sm.handle_append_entries(&m);
+			assert_eq!(sm.raft_log.last_index(), windex);
+			assert_eq!(sm.raft_log.committed, wcommit);
+			let m: Vec<Message> = sm.msgs.drain(..).collect();
+			assert_eq!(m.len(), 1);
+			assert_eq!(m[0].reject, wreject);
+		}
+	}
+
+	fn new_append_message_with_entries(
+		term: u64,
+		log_term: u64,
+		index: u64,
+		commit: u64,
+		ents: Vec<Entry>,
+	) -> Message {
+		let mut m = Message::new();
+		m.set_msg_type(MessageType::MsgApp);
+		m.set_term(term);
+		m.set_log_term(log_term);
+		m.set_index(index);
+		m.set_commit(commit);
+		if !ents.is_empty() {
+			m.set_entries(RepeatedField::from_vec(ents));
+		}
+		m
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
