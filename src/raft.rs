@@ -3313,6 +3313,46 @@ mod test {
 		m
 	}
 
+	#[test]
+	fn test_handle_heartbeat_resp() {
+		let mut s = MemStorage::new();
+		let _ = s.append(&vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)]);
+		let mut sm = new_test_raft(1, vec![1, 2], 5, 1, s);
+		sm.become_candidate();
+		sm.become_leader();
+		let committed = sm.raft_log.last_index();
+		sm.raft_log.commit_to(committed);
+
+		let _ = sm.step(new_heartbeat_resp_message(2));
+		let m: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(m.len(), 1);
+		assert_eq!(m[0].get_msg_type(), MessageType::MsgApp);
+
+		let _ = sm.step(new_heartbeat_resp_message(2));
+		let m: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(m.len(), 1);
+		assert_eq!(m[0].get_msg_type(), MessageType::MsgApp);
+
+		let mut msg = Message::new();
+		msg.set_from(2);
+		msg.set_msg_type(MessageType::MsgAppResp);
+		msg.set_index(m[0].get_index() + m[0].get_entries().len() as u64);
+		let _ = sm.step(msg);
+		sm.msgs.drain(..);
+
+		let _ = sm.step(new_heartbeat_resp_message(2));
+		let msgs: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(msgs.len(), 0);
+	}
+
+	fn new_heartbeat_resp_message(from: u64) -> Message {
+		let mut m = Message::new();
+		m.set_from(from);
+		m.set_msg_type(MessageType::MsgHeartbeatResp);
+
+		m
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
