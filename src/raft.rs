@@ -3353,6 +3353,39 @@ mod test {
 		m
 	}
 
+	#[test]
+	fn test_raft_frees_read_only_mem() {
+		let mut sm = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new());
+		sm.become_candidate();
+		sm.become_leader();
+		let last_index = sm.raft_log.last_index();
+		sm.raft_log.commit_to(last_index);
+
+		let ctx: Vec<u8> = Vec::from("ctx");
+
+		let _ = sm.step(new_message_with_entries(
+			2,
+			NONE,
+			MessageType::MsgReadIndex,
+			vec![new_entry_with_data(ctx.clone())],
+		));
+		let msgs: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(msgs.len(), 1);
+		assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
+		assert_eq!(msgs[0].get_context().to_vec(), ctx);
+		assert_eq!(sm.read_only.read_index_queue.len(), 1);
+		assert_eq!(sm.read_only.pending_read_index.len(), 1);
+		assert!(sm.read_only.pending_read_index.contains_key(&ctx));
+
+		let mut m = new_message(2, NONE, MessageType::MsgHeartbeatResp);
+		m.set_context(ctx.clone());
+		let _ = sm.step(m);
+
+		assert_eq!(sm.read_only.read_index_queue.len(), 0);
+		assert_eq!(sm.read_only.pending_read_index.len(), 0);
+		assert!(!sm.read_only.pending_read_index.contains_key(&ctx));
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
