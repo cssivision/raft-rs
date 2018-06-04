@@ -3386,6 +3386,52 @@ mod test {
 		assert!(!sm.read_only.pending_read_index.contains_key(&ctx));
 	}
 
+	#[test]
+	fn test_msg_app_resp_wait_reset() {
+		let mut sm = new_test_raft(1, vec![1, 2, 3], 5, 1, MemStorage::new());
+		sm.become_candidate();
+		sm.become_leader();
+
+		sm.bcast_append();
+		sm.msgs.drain(..);
+
+		let mut m = new_message(2, NONE, MessageType::MsgAppResp);
+		m.set_index(1);
+		// Node 2 acks the first entry, making it committed.
+		let _ = sm.step(m);
+		assert_eq!(sm.raft_log.committed, 1);
+
+		// Also consume the MsgApp messages that update Commit on the followers.
+		sm.msgs.drain(..);
+
+		let m = new_message_with_entries(1, NONE, MessageType::MsgProp, vec![Entry::new()]);
+
+		// A new command is now proposed on node 1.
+		let _ = sm.step(m);
+
+		// The command is broadcast to all nodes not in the wait state.
+		// Node 2 left the wait state due to its MsgAppResp, but node 3 is still waiting.
+		let msgs: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(msgs.len(), 1);
+
+		assert_eq!(msgs[0].get_msg_type(), MessageType::MsgApp);
+		assert_eq!(msgs[0].get_to(), 2);
+		assert_eq!(msgs[0].get_entries().len(), 1);
+		assert_eq!(msgs[0].get_entries()[0].get_index(), 2);
+
+		let mut m = new_message(3, NONE, MessageType::MsgAppResp);
+		m.set_index(1);
+		let _ = sm.step(m);
+
+		let msgs: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(msgs.len(), 1);
+
+		assert_eq!(msgs[0].get_msg_type(), MessageType::MsgApp);
+		assert_eq!(msgs[0].get_to(), 3);
+		assert_eq!(msgs[0].get_entries().len(), 1);
+		assert_eq!(msgs[0].get_entries()[0].get_index(), 2);
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
