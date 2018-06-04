@@ -3257,7 +3257,7 @@ mod test {
 			assert_eq!(sm.raft_log.committed, wcommit);
 			let m: Vec<Message> = sm.msgs.drain(..).collect();
 			assert_eq!(m.len(), 1);
-			assert_eq!(m[0].reject, wreject);
+			assert_eq!(m[0].get_reject(), wreject);
 		}
 	}
 
@@ -3277,6 +3277,39 @@ mod test {
 		if !ents.is_empty() {
 			m.set_entries(RepeatedField::from_vec(ents));
 		}
+		m
+	}
+
+	#[test]
+	fn test_handle_heartbeat() {
+		let commit: u64 = 2;
+		let tests = vec![
+			(new_heartbeat_message(2, 1, 2, commit + 1), commit + 1),
+			(new_heartbeat_message(2, 1, 2, commit - 1), commit),
+		];
+
+		for (mut m, wcommit) in tests {
+			let mut s = MemStorage::new();
+			let _ = s.append(&vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)]);
+			let mut sm = new_test_raft(1, vec![1, 2], 5, 1, s);
+			sm.become_follower(2, 2);
+			sm.raft_log.commit_to(commit);
+			sm.handle_heartbeat(m);
+			assert_eq!(sm.raft_log.committed, wcommit);
+			let m: Vec<Message> = sm.msgs.drain(..).collect();
+			assert_eq!(m.len(), 1);
+			assert_eq!(m[0].get_msg_type(), MessageType::MsgHeartbeatResp);
+		}
+	}
+
+	fn new_heartbeat_message(from: u64, to: u64, term: u64, commit: u64) -> Message {
+		let mut m = Message::new();
+		m.set_from(from);
+		m.set_to(to);
+		m.set_term(term);
+		m.set_commit(commit);
+		m.set_msg_type(MessageType::MsgHeartbeat);
+
 		m
 	}
 
