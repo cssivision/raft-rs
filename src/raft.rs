@@ -3494,6 +3494,55 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_state_transition() {
+		let tests = vec![
+			(StateType::Follower, StateType::Follower, true, 1, NONE),
+			(StateType::Follower, StateType::PreCandidate, true, 0, NONE),
+			(StateType::Follower, StateType::Candidate, true, 1, NONE),
+			(StateType::Follower, StateType::Leader, false, 0, NONE),
+			(StateType::PreCandidate, StateType::Follower, true, 0, NONE),
+			(
+				StateType::PreCandidate,
+				StateType::PreCandidate,
+				true,
+				0,
+				NONE,
+			),
+			(StateType::PreCandidate, StateType::Candidate, true, 1, NONE),
+			(StateType::PreCandidate, StateType::Leader, true, 0, 1),
+			(StateType::Candidate, StateType::Follower, true, 0, NONE),
+			(StateType::Candidate, StateType::PreCandidate, true, 0, NONE),
+			(StateType::Candidate, StateType::Candidate, true, 1, NONE),
+			(StateType::Candidate, StateType::Leader, true, 0, 1),
+			(StateType::Leader, StateType::Follower, true, 1, NONE),
+			(StateType::Leader, StateType::PreCandidate, false, 0, NONE),
+			(StateType::Leader, StateType::Candidate, false, 1, NONE),
+			(StateType::Leader, StateType::Leader, true, 0, 1),
+		];
+
+		for (from, to, wallow, wterm, wlead) in tests {
+			use std::panic;
+			let result = panic::catch_unwind(|| {
+				let mut sm = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+				sm.state = from;
+
+				match to {
+					StateType::Follower => sm.become_follower(wterm, wlead),
+					StateType::PreCandidate => sm.become_pre_candidate(),
+					StateType::Candidate => sm.become_candidate(),
+					StateType::Leader => sm.become_leader(),
+				}
+
+				assert_eq!(sm.term, wterm);
+				assert_eq!(sm.lead, wlead);
+			});
+			if wallow {
+				assert!(result.is_ok());
+			}
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
