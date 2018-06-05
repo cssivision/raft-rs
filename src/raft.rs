@@ -3432,6 +3432,68 @@ mod test {
 		assert_eq!(msgs[0].get_entries()[0].get_index(), 2);
 	}
 
+	#[test]
+	fn test_recv_msg_vote() {
+		recv_msg_vote(MessageType::MsgVote)
+	}
+
+	#[test]
+	fn test_msg_pre_vote() {
+		recv_msg_vote(MessageType::MsgPreVote)
+	}
+
+	fn recv_msg_vote(msg_type: MessageType) {
+		let tests = vec![
+			(StateType::Follower, 0, 0, NONE, true),
+			(StateType::Follower, 0, 1, NONE, true),
+			(StateType::Follower, 0, 2, NONE, true),
+			(StateType::Follower, 0, 3, NONE, false),
+			(StateType::Follower, 1, 0, NONE, true),
+			(StateType::Follower, 1, 1, NONE, true),
+			(StateType::Follower, 1, 2, NONE, true),
+			(StateType::Follower, 1, 3, NONE, false),
+			(StateType::Follower, 2, 0, NONE, true),
+			(StateType::Follower, 2, 1, NONE, true),
+			(StateType::Follower, 2, 2, NONE, false),
+			(StateType::Follower, 2, 3, NONE, false),
+			(StateType::Follower, 3, 0, NONE, true),
+			(StateType::Follower, 3, 1, NONE, true),
+			(StateType::Follower, 3, 2, NONE, false),
+			(StateType::Follower, 3, 3, NONE, false),
+			(StateType::Follower, 3, 2, 2, false),
+			(StateType::Follower, 3, 2, 1, true),
+			(StateType::Leader, 3, 3, 1, true),
+			(StateType::PreCandidate, 3, 3, 1, true),
+			(StateType::Candidate, 3, 3, 1, true),
+		];
+
+		for (state, index, log_term, vote_for, wreject) in tests {
+			let mut sm = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+			sm.state = state;
+			sm.vote = vote_for;
+			let mut s = MemStorage::new();
+			let _ = s.append(&vec![new_entry(1, 1), new_entry(2, 2)]);
+			sm.raft_log = RaftLog {
+				storage: s,
+				unstable: Unstable::new(3, String::default()),
+				..Default::default()
+			};
+
+			let term = cmp::max(sm.raft_log.last_term(), log_term);
+			sm.term = term;
+			let mut m = new_message(2, NONE, msg_type);
+			m.set_term(term);
+			m.set_log_term(log_term);
+			m.set_index(index);
+			let _ = sm.step(m);
+
+			let msgs: Vec<Message> = sm.msgs.drain(..).collect();
+			assert_eq!(msgs.len(), 1);
+			assert_eq!(msgs[0].get_msg_type(), vote_msg_resp_type(msg_type));
+			assert_eq!(msgs[0].get_reject(), wreject);
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
