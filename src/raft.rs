@@ -3543,6 +3543,49 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_all_server_step_down() {
+		let tests = vec![
+			(StateType::Follower, StateType::Follower, 3, 0),
+			(StateType::PreCandidate, StateType::Follower, 3, 0),
+			(StateType::Candidate, StateType::Follower, 3, 0),
+			(StateType::Leader, StateType::Follower, 3, 1),
+		];
+
+		let t_msg_types = vec![MessageType::MsgVote, MessageType::MsgApp];
+		let t_term = 3;
+
+		for (state, wstate, wterm, windex) in tests {
+			let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+			match state {
+				StateType::Follower => sm.become_follower(1, NONE),
+				StateType::PreCandidate => sm.become_pre_candidate(),
+				StateType::Candidate => sm.become_candidate(),
+				StateType::Leader => {
+					sm.become_candidate();
+					sm.become_leader();
+				}
+			}
+
+			for msg_type in &t_msg_types {
+				let mut m = new_message(2, NONE, msg_type.clone());
+				m.set_term(t_term);
+				m.set_log_term(t_term);
+				let _ = sm.step(m);
+
+				assert_eq!(sm.state, wstate);
+				assert_eq!(sm.term, wterm);
+				assert_eq!(sm.raft_log.last_index(), windex);
+				assert_eq!(sm.raft_log.all_entries().len() as u64, windex);
+				let mut wlead = 2;
+				if msg_type == &MessageType::MsgVote {
+					wlead = NONE;
+				}
+				assert_eq!(sm.lead, wlead);
+			}
+		}
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
