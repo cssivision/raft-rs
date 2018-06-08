@@ -1609,7 +1609,7 @@ impl<T: Storage> Raft<T> {
 			}
 		});
 		self.set_learner_prs(learner_prs);
-		act > self.quorum()
+		act >= self.quorum()
 	}
 
 	// bcast_heartbeat sends RPC, without entries to all the peers.
@@ -3635,6 +3635,23 @@ mod test {
 			nt.peers.get(&1).unwrap().term,
 			nt.peers.get(&3).unwrap().term
 		);
+	}
+
+	#[test]
+	fn test_leader_stepdown_when_quorum_active() {
+		let mut sm = new_test_raft(1, vec![1, 2, 3], 5, 1, MemStorage::new());
+		sm.check_quorum = true;
+		sm.become_candidate();
+		sm.become_leader();
+
+		for _ in 0..sm.election_timeout + 1 {
+			let mut m = new_message(2, NONE, MessageType::MsgHeartbeatResp);
+			m.set_term(sm.term);
+			let _ = sm.step(m);
+			sm.tick();
+		}
+
+		assert_eq!(sm.state, StateType::Leader);
 	}
 
 	fn new_entry(term: u64, index: u64) -> Entry {
