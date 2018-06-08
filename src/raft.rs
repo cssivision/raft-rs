@@ -3586,6 +3586,57 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_candidate_reset_term_msg_app() {
+		candidate_reset_term(MessageType::MsgApp);
+	}
+
+	#[test]
+	fn test_candidate_reset_term_msg_heartbeat() {
+		candidate_reset_term(MessageType::MsgHeartbeat);
+	}
+
+	fn candidate_reset_term(msg_type: MessageType) {
+		let a = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let b = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let c = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(a)),
+			Some(StateMachine::new(b)),
+			Some(StateMachine::new(c)),
+		]);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Follower);
+
+		nt.isolate(3);
+
+		nt.send(vec![new_message(2, 2, MessageType::MsgHup)]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.peers
+			.get_mut(&3)
+			.unwrap()
+			.reset_randomized_election_timeout();
+		for _ in 0..nt.peers.get(&3).unwrap().randomized_election_timeout {
+			nt.peers.get_mut(&3).unwrap().tick();
+		}
+
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::Candidate);
+		nt.recover();
+		let mut m = new_message(1, 3, msg_type);
+		m.set_term(nt.peers.get(&1).unwrap().term);
+		nt.send(vec![m]);
+		assert_eq!(
+			nt.peers.get(&1).unwrap().term,
+			nt.peers.get(&3).unwrap().term
+		);
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
