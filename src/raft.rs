@@ -3827,6 +3827,56 @@ mod test {
 		assert_eq!(nt.peers.get_mut(&2).unwrap().lead, 1);
 	}
 
+	#[test]
+	fn test_disruptive_follower() {
+		let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n3 = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+		n1.check_quorum = true;
+		n2.check_quorum = true;
+		n3.check_quorum = true;
+
+		n1.become_follower(1, NONE);
+		n2.become_follower(1, NONE);
+		n3.become_follower(1, NONE);
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(n1)),
+			Some(StateMachine::new(n2)),
+			Some(StateMachine::new(n3)),
+		]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(nt.peers.get_mut(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get_mut(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get_mut(&3).unwrap().state, StateType::Follower);
+		let timeout = nt.peers.get(&3).unwrap().election_timeout;
+		nt.peers.get_mut(&3).unwrap().randomized_election_timeout = timeout + 2;
+		for _ in 0..nt.peers.get_mut(&3).unwrap().randomized_election_timeout - 1 {
+			nt.peers.get_mut(&3).unwrap().tick();
+		}
+		nt.peers.get_mut(&3).unwrap().tick();
+
+		assert_eq!(nt.peers.get_mut(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get_mut(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get_mut(&3).unwrap().state, StateType::Candidate);
+
+		assert_eq!(nt.peers.get_mut(&1).unwrap().term, 2);
+		assert_eq!(nt.peers.get_mut(&2).unwrap().term, 2);
+		assert_eq!(nt.peers.get_mut(&3).unwrap().term, 3);
+
+		let mut m = new_message(1, 3, MessageType::MsgHeartbeat);
+		m.set_term(nt.peers.get_mut(&1).unwrap().term);
+		nt.send(vec![m]);
+
+		assert_eq!(nt.peers.get_mut(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get_mut(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get_mut(&3).unwrap().state, StateType::Candidate);
+
+		assert_eq!(nt.peers.get_mut(&1).unwrap().term, 3);
+		assert_eq!(nt.peers.get_mut(&2).unwrap().term, 2);
+		assert_eq!(nt.peers.get_mut(&3).unwrap().term, 3);
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
