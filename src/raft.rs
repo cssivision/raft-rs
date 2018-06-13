@@ -1398,7 +1398,7 @@ impl<T: Storage> Raft<T> {
 			return;
 		}
 
-		let rss = self.read_only.advance(&msg);
+		let rss = self.read_only.advance(msg);
 		for rs in rss {
 			let mut req = rs.req;
 			if req.get_from() == NONE || req.get_from() == self.id {
@@ -1409,10 +1409,10 @@ impl<T: Storage> Raft<T> {
 				self.read_states.push(s);
 			} else {
 				let mut m = Message::new();
-				m.set_to(msg.get_from());
+				m.set_to(req.get_from());
 				m.set_msg_type(MessageType::MsgReadIndexResp);
 				m.set_index(rs.index);
-				m.set_entries(RepeatedField::from_vec(msg.get_entries().to_vec()));
+				m.set_entries(req.take_entries());
 
 				*more_to_send = Some(m);
 			}
@@ -3939,6 +3939,133 @@ mod test {
 		nt.send(vec![m]);
 
 		assert_eq!(nt.peers.get_mut(&1).unwrap().state, StateType::Leader);
+	}
+
+	#[test]
+	fn test_read_only_option_safe() {
+		let a = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let b = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let c = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(a)),
+			Some(StateMachine::new(b)),
+			Some(StateMachine::new(c)),
+		]);
+
+		let timeout = nt.peers.get(&2).unwrap().election_timeout;
+		nt.peers.get_mut(&2).unwrap().randomized_election_timeout = timeout + 1;
+		for _ in 0..timeout {
+			nt.peers.get_mut(&2).unwrap().tick();
+		}
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(nt.peers.get_mut(&1).unwrap().state, StateType::Leader);
+
+		let tests = vec![
+			(1, 10, 11, Vec::from("ctx1")),
+			(2, 10, 21, Vec::from("ctx2")),
+			(3, 10, 31, Vec::from("ctx3")),
+			(1, 10, 41, Vec::from("ctx4")),
+			(2, 10, 51, Vec::from("ctx5")),
+			(3, 10, 61, Vec::from("ctx6")),
+		];
+
+		for (sm, proposals, wri, wctx) in tests {
+			for _ in 0..proposals {
+				nt.send(vec![new_message_with_entries(
+					1,
+					1,
+					MessageType::MsgProp,
+					vec![Entry::new()],
+				)]);
+			}
+
+			let id = nt.peers.get_mut(&sm).unwrap().id;
+			let mut m = new_message_with_entries(
+				id,
+				id,
+				MessageType::MsgReadIndex,
+				vec![new_entry_with_data(wctx.clone())],
+			);
+			nt.send(vec![m]);
+
+			assert!(!nt.peers.get_mut(&sm).unwrap().read_states.is_empty());
+			assert_eq!(nt.peers.get_mut(&sm).unwrap().read_states[0].index, wri);
+			assert_eq!(
+				nt.peers.get_mut(&sm).unwrap().read_states[0].request_ctx,
+				wctx
+			);
+
+			nt.peers.get_mut(&sm).unwrap().read_states.clear();
+		}
+	}
+
+	#[test]
+	fn test_read_only_option_leased() {
+		let mut a = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut b = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut c = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+		a.read_only.option = ReadOnlyOption::LeaseBased;
+		b.read_only.option = ReadOnlyOption::LeaseBased;
+		c.read_only.option = ReadOnlyOption::LeaseBased;
+
+		a.check_quorum = true;
+		b.check_quorum = true;
+		c.check_quorum = true;
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(a)),
+			Some(StateMachine::new(b)),
+			Some(StateMachine::new(c)),
+		]);
+
+		let timeout = nt.peers.get(&2).unwrap().election_timeout;
+		nt.peers.get_mut(&2).unwrap().randomized_election_timeout = timeout + 1;
+		for _ in 0..timeout {
+			nt.peers.get_mut(&2).unwrap().tick();
+		}
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(nt.peers.get_mut(&1).unwrap().state, StateType::Leader);
+
+		let tests = vec![
+			(1, 10, 11, Vec::from("ctx1")),
+			(2, 10, 21, Vec::from("ctx2")),
+			(3, 10, 31, Vec::from("ctx3")),
+			(1, 10, 41, Vec::from("ctx4")),
+			(2, 10, 51, Vec::from("ctx5")),
+			(3, 10, 61, Vec::from("ctx6")),
+		];
+
+		for (sm, proposals, wri, wctx) in tests {
+			for _ in 0..proposals {
+				nt.send(vec![new_message_with_entries(
+					1,
+					1,
+					MessageType::MsgProp,
+					vec![Entry::new()],
+				)]);
+			}
+
+			let id = nt.peers.get_mut(&sm).unwrap().id;
+			let mut m = new_message_with_entries(
+				id,
+				id,
+				MessageType::MsgReadIndex,
+				vec![new_entry_with_data(wctx.clone())],
+			);
+			nt.send(vec![m]);
+
+			assert!(!nt.peers.get_mut(&sm).unwrap().read_states.is_empty());
+			assert_eq!(nt.peers.get_mut(&sm).unwrap().read_states[0].index, wri);
+			assert_eq!(
+				nt.peers.get_mut(&sm).unwrap().read_states[0].request_ctx,
+				wctx
+			);
+
+			nt.peers.get_mut(&sm).unwrap().read_states.clear();
+		}
 	}
 
 	fn new_entry(term: u64, index: u64) -> Entry {

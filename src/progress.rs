@@ -363,7 +363,6 @@ mod test {
         inflight2.buffer.extend_from_slice(&vec![0, 0, 0, 0, 0]);
 
         for i in 0..5 {
-            println!("{}", i);
             inflight2.add(i);
         }
 
