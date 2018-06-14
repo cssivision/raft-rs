@@ -325,6 +325,7 @@ impl<T: Storage> RaftLog<T> {
             s.get_metadata().get_term()
         );
 
+        self.committed = s.get_metadata().get_index();
         self.unstable.restore(s);
     }
 

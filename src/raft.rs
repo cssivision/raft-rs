@@ -4149,6 +4149,111 @@ mod test {
 		assert_eq!(nt.peers.get(&1).unwrap().read_states[0].request_ctx, wctx);
 	}
 
+	use raftpb::{ConfState, SnapshotMetadata};
+
+	// verfies that a normal peer can't become learner again
+	// when restores snapshot.
+	#[test]
+	fn test_restore_invalid_learner() {
+		let s = new_snapshot(11, 11, vec![3], vec![1, 2]);
+
+		let mut sm = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+		assert!(!sm.is_learner);
+		assert!(!sm.restore(s));
+	}
+
+	#[test]
+	fn test_restore_learner_promotion() {
+		let s = new_snapshot(11, 11, vec![], vec![1, 2, 3]);
+		let mut sm = new_test_learner_raft(3, vec![1, 2], vec![3], 10, 1, MemStorage::new());
+
+		assert!(sm.is_learner);
+		assert!(sm.restore(s));
+		assert!(!sm.is_learner);
+	}
+
+	#[test]
+	fn test_learner_receive_snapshot() {
+		let s = new_snapshot(11, 11, vec![1], vec![2]);
+
+		let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, MemStorage::new());
+		let n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, MemStorage::new());
+
+		n1.restore(s);
+
+		let committed = n1.raft_log.committed;
+		n1.raft_log.applied_to(committed);
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(n1)),
+			Some(StateMachine::new(n2)),
+		]);
+
+		let timeout = nt.peers.get(&1).unwrap().election_timeout;
+		nt.peers.get_mut(&1).unwrap().randomized_election_timeout = timeout;
+		for _ in 0..timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgBeat)]);
+
+		assert_eq!(
+			nt.peers.get(&1).unwrap().raft_log.committed,
+			nt.peers.get(&2).unwrap().raft_log.committed,
+		);
+	}
+
+	#[test]
+	fn test_restore_ignore_snapshot() {
+		let previous_ents = vec![new_entry(1, 1), new_entry(1, 2), new_entry(1, 3)];
+		let commit: u64 = 1;
+		let storage = MemStorage::new();
+		let mut sm = new_test_raft(1, vec![1, 2], 10, 1, storage);
+		sm.raft_log.append(&previous_ents);
+		sm.raft_log.commit_to(commit);
+
+		let mut s = new_snapshot(commit, 1, vec![], vec![1, 2]);
+		assert!(!sm.restore(s.clone()));
+		assert_eq!(sm.raft_log.committed, commit);
+
+		s.mut_metadata().set_index(commit + 1);
+		assert!(!sm.restore(s));
+		assert_eq!(sm.raft_log.committed, commit + 1);
+	}
+
+	#[test]
+	fn test_provide_snap() {
+		let s = new_snapshot(11, 11, vec![], vec![1, 2]);
+		let mut sm = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+		sm.restore(s);
+
+		sm.become_candidate();
+		sm.become_leader();
+		let first_index = sm.raft_log.first_index();
+		sm.prs.get_mut(&2).unwrap().next = first_index;
+		let mut m = new_message(2, 1, MessageType::MsgAppResp);
+		m.set_index(first_index - 1);
+		m.set_reject(true);
+		let _ = sm.step(m);
+
+		let msgs: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(msgs.len(), 1);
+		assert_eq!(msgs[0].get_msg_type(), MessageType::MsgSnap);
+	}
+
+	fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
+		let mut s = Snapshot::new();
+		let mut metadata = SnapshotMetadata::new();
+		metadata.set_index(index);
+		metadata.set_term(term);
+		let mut conf_state = ConfState::new();
+		conf_state.set_learners(learners);
+		conf_state.set_nodes(nodes);
+		metadata.set_conf_state(conf_state);
+		s.set_metadata(metadata);
+		s
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
