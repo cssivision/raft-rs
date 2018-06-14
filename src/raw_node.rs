@@ -1,8 +1,10 @@
 use errors::{Error, Result};
 use progress::Progress;
 use raft::{Config, Peer, Raft, StateType, Status, NONE};
-use raftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState, Message,
-             MessageType, Snapshot};
+use raftpb::{
+    ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState, Message, MessageType,
+    Snapshot,
+};
 use read_only::ReadState;
 use storage::Storage;
 use util::{is_local_msg, is_response_msg};
@@ -305,7 +307,8 @@ impl<T: Storage> RawNode<T> {
             return true;
         }
 
-        if !self.raft.msgs.is_empty() || !self.raft.raft_log.unstable_entries().is_empty()
+        if !self.raft.msgs.is_empty()
+            || !self.raft.raft_log.unstable_entries().is_empty()
             || self.raft.raft_log.has_next_ents()
         {
             return true;
@@ -348,5 +351,19 @@ impl<T: Storage> RawNode<T> {
     /// status returns the current status of the given group.
     pub fn status(&self) -> Status {
         self.raft.get_status()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use protobuf::ProtobufEnum;
+    use storage::MemStorage;
+
+    #[test]
+    fn test_raw_node_step() {
+        for msg_type in MessageType::values() {
+            let mut s = MemStorage::new();
+        }
     }
 }

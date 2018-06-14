@@ -4068,6 +4068,87 @@ mod test {
 		}
 	}
 
+	#[test]
+	fn test_read_only_for_new_leader() {
+		let node_configs = vec![(1, 1, 1, 0), (2, 2, 2, 2), (3, 2, 2, 2)];
+		let mut peers = vec![];
+
+		for (id, committed, applied, compact_index) in node_configs {
+			let mut storage = MemStorage::new();
+			let _ = storage.append(&vec![new_entry(1, 1), new_entry(1, 2)]);
+
+			let mut hs = HardState::new();
+			hs.set_term(1);
+			hs.set_commit(committed);
+			storage.set_hard_state(hs);
+
+			if compact_index != 0 {
+				let _ = storage.compact(compact_index);
+			}
+			let mut cfg = new_test_config(id, vec![1, 2, 3], 10, 1);
+			cfg.applied = applied;
+			let r = Raft::new(&mut cfg, storage);
+			peers.push(Some(StateMachine::new(r)));
+		}
+		let mut nt = Network::new(peers);
+
+		// Drop MsgApp to forbid peer a to commit any log entry at its term after it becomes leader.
+		nt.ignore(MessageType::MsgApp);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+
+		let windex = 4;
+		let wctx = Vec::from("ctx");
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgReadIndex,
+			vec![new_entry_with_data(wctx.clone())],
+		)]);
+		assert!(nt.peers.get(&1).unwrap().read_states.is_empty());
+
+		nt.recover();
+
+		let timeout = nt.peers.get(&1).unwrap().election_timeout;
+		for _ in 0..timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().raft_log.committed, 4);
+		let last_log_term = nt
+			.peers
+			.get(&1)
+			.unwrap()
+			.raft_log
+			.zero_term_on_err_compacted(
+				nt.peers
+					.get(&1)
+					.unwrap()
+					.raft_log
+					.term(nt.peers.get(&1).unwrap().raft_log.committed),
+			);
+
+		assert_eq!(last_log_term, nt.peers.get(&1).unwrap().term);
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgReadIndex,
+			vec![new_entry_with_data(wctx.clone())],
+		)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().read_states[0].index, windex);
+		assert_eq!(nt.peers.get(&1).unwrap().read_states[0].request_ctx, wctx);
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);

@@ -43,13 +43,37 @@ pub fn vote_msg_resp_type(t: MessageType) -> MessageType {
 }
 
 pub fn is_local_msg(msgt: MessageType) -> bool {
-    msgt == MessageType::MsgHup || msgt == MessageType::MsgBeat
-        || msgt == MessageType::MsgUnreachable || msgt == MessageType::MsgSnapStatus
+    msgt == MessageType::MsgHup
+        || msgt == MessageType::MsgBeat
+        || msgt == MessageType::MsgUnreachable
+        || msgt == MessageType::MsgSnapStatus
         || msgt == MessageType::MsgCheckQuorum
 }
 
 pub fn is_response_msg(msgt: MessageType) -> bool {
-    msgt == MessageType::MsgAppResp || msgt == MessageType::MsgVoteResp
-        || msgt == MessageType::MsgHeartbeatResp || msgt == MessageType::MsgPreVoteResp
+    msgt == MessageType::MsgAppResp
+        || msgt == MessageType::MsgVoteResp
+        || msgt == MessageType::MsgHeartbeatResp
+        || msgt == MessageType::MsgPreVoteResp
         || msgt == MessageType::MsgUnreachable
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_is_local_msg() {}
+
+    #[test]
+    fn test_is_response_msg() {}
+
+    #[test]
+    fn test_vote_msg_resp_type() {}
+
+    #[test]
+    fn test_limit_size() {}
+
+    #[test]
+    fn test_num_of_pending_conf() {}
 }
