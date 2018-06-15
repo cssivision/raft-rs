@@ -199,7 +199,7 @@ impl MemStorage {
         self.core.read().unwrap()
     }
 
-    fn write_lock(&self) -> RwLockWriteGuard<MemStorageCore> {
+    pub fn write_lock(&self) -> RwLockWriteGuard<MemStorageCore> {
         self.core.write().unwrap()
     }
 
@@ -398,7 +398,8 @@ mod test {
                 4,
                 7,
                 u64::from(
-                    Message::compute_size(&ents[1]) + Message::compute_size(&ents[2])
+                    Message::compute_size(&ents[1])
+                        + Message::compute_size(&ents[2])
                         + Message::compute_size(&ents[3]) / 2,
                 ),
                 None,
@@ -408,7 +409,8 @@ mod test {
                 4,
                 7,
                 u64::from(
-                    Message::compute_size(&ents[1]) + Message::compute_size(&ents[2])
+                    Message::compute_size(&ents[1])
+                        + Message::compute_size(&ents[2])
                         + Message::compute_size(&ents[3]) - 1,
                 ),
                 None,
@@ -418,7 +420,8 @@ mod test {
                 4,
                 7,
                 u64::from(
-                    Message::compute_size(&ents[1]) + Message::compute_size(&ents[2])
+                    Message::compute_size(&ents[1])
+                        + Message::compute_size(&ents[2])
                         + Message::compute_size(&ents[3]),
                 ),
                 None,
@@ -550,7 +553,8 @@ mod test {
         let data: Vec<u8> = Vec::from("data");
 
         let s = new_memory_storage(ents.clone());
-        match s.write_lock()
+        match s
+            .write_lock()
             .create_snapshot(4, Some(cs.clone()), data.clone())
         {
             Err(e) => panic!(e),

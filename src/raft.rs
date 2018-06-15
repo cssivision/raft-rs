@@ -4241,6 +4241,104 @@ mod test {
 		assert_eq!(msgs[0].get_msg_type(), MessageType::MsgSnap);
 	}
 
+	#[test]
+	fn test_ignore_providing_snap() {
+		let s = new_snapshot(11, 11, vec![], vec![1, 2]);
+		let mut sm = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+		sm.restore(s);
+		sm.become_candidate();
+		sm.become_leader();
+
+		let first_index = sm.raft_log.first_index();
+		sm.prs.get_mut(&2).unwrap().next = first_index - 1;
+		sm.prs.get_mut(&2).unwrap().recent_active = false;
+
+		let _ = sm.step(new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("somdata"))],
+		));
+
+		let msgs: Vec<Message> = sm.msgs.drain(..).collect();
+		assert_eq!(msgs.len(), 0);
+	}
+
+	#[test]
+	fn test_restore_from_snap_msg() {
+		let s = new_snapshot(11, 11, vec![], vec![1, 2]);
+		let mut m = new_message(1, NONE, MessageType::MsgSnap);
+		m.set_snapshot(s);
+		let mut sm = new_test_raft(2, vec![1, 2], 10, 1, MemStorage::new());
+		let _ = sm.step(m);
+
+		assert_eq!(sm.lead, 1);
+	}
+
+	#[test]
+	fn test_slow_node_restore() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		nt.isolate(3);
+
+		for _ in 0..101 {
+			nt.send(vec![new_message_with_entries(
+				1,
+				1,
+				MessageType::MsgProp,
+				vec![Entry::new()],
+			)]);
+		}
+
+		next_ents(
+			nt.peers.get_mut(&1).unwrap(),
+			nt.storage.get_mut(&1).unwrap(),
+		);
+
+		let mut cs = ConfState::new();
+		cs.set_nodes(nt.peers.get(&1).unwrap().nodes());
+
+		let _ = nt
+			.storage
+			.get_mut(&1)
+			.unwrap()
+			.write_lock()
+			.create_snapshot(nt.peers.get(&1).unwrap().raft_log.applied, Some(cs), vec![]);
+
+		let _ = nt
+			.storage
+			.get_mut(&1)
+			.unwrap()
+			.compact(nt.peers.get(&1).unwrap().raft_log.applied);
+
+		nt.recover();
+
+		loop {
+			nt.send(vec![new_message_with_entries(
+				1,
+				1,
+				MessageType::MsgProp,
+				vec![Entry::new()],
+			)]);
+
+			if nt.peers.get(&1).unwrap().prs.get(&3).unwrap().recent_active {
+				break;
+			}
+		}
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+
+		assert_eq!(
+			nt.peers.get(&3).unwrap().raft_log.committed,
+			nt.peers.get(&1).unwrap().raft_log.committed,
+		);
+	}
+
 	fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
 		let mut s = Snapshot::new();
 		let mut metadata = SnapshotMetadata::new();
