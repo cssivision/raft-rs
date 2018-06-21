@@ -653,7 +653,7 @@ impl<T: Storage> Raft<T> {
 			let mut msg = Message::new();
 			msg.set_from(self.id);
 			msg.set_msg_type(MessageType::MsgHup);
-			self.step(msg).is_ok();
+			let _ = self.step(msg);
 		}
 	}
 
@@ -668,7 +668,7 @@ impl<T: Storage> Raft<T> {
 				let mut m = Message::new();
 				m.set_from(self.id);
 				m.set_msg_type(MessageType::MsgCheckQuorum);
-				self.step(m).is_ok();
+				let _ = self.step(m);
 			}
 
 			// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
@@ -686,7 +686,7 @@ impl<T: Storage> Raft<T> {
 			let mut m = Message::new();
 			m.set_from(self.id);
 			m.set_msg_type(MessageType::MsgBeat);
-			self.step(m).is_ok();
+			let _ = self.step(m);
 		}
 	}
 
@@ -1588,25 +1588,29 @@ impl<T: Storage> Raft<T> {
 	fn check_quorum_active(&mut self) -> bool {
 		let mut act = 0;
 		let self_id = self.id;
-		let prs = self.take_prs();
-		prs.iter().for_each(|(&id, pr)| {
+		let mut prs = self.take_prs();
+		prs.iter_mut().for_each(|(&id, pr)| {
 			if id == self_id {
 				act += 1;
 			}
 			if pr.recent_active {
 				act += 1;
 			}
+
+			pr.recent_active = false;
 		});
 		self.set_prs(prs);
 
-		let learner_prs = self.take_learner_prs();
-		learner_prs.iter().for_each(|(&id, pr)| {
+		let mut learner_prs = self.take_learner_prs();
+		learner_prs.iter_mut().for_each(|(&id, pr)| {
 			if id == self_id {
 				act += 1;
 			}
 			if pr.recent_active {
 				act += 1;
 			}
+
+			pr.recent_active = false;
 		});
 		self.set_learner_prs(learner_prs);
 		act >= self.quorum()
@@ -4337,6 +4341,115 @@ mod test {
 			nt.peers.get(&3).unwrap().raft_log.committed,
 			nt.peers.get(&1).unwrap().raft_log.committed,
 		);
+	}
+
+	#[test]
+	fn test_step_config() {
+		let mut r = new_test_raft(1, vec![1, 2], 10, 1, MemStorage::new());
+		r.become_candidate();
+		r.become_leader();
+		let index = r.raft_log.last_index();
+		let mut e = Entry::new();
+		e.set_entry_type(EntryType::EntryConfChange);
+		let m = new_message_with_entries(1, 1, MessageType::MsgProp, vec![e]);
+		let _ = r.step(m);
+		assert_eq!(r.raft_log.last_index(), index + 1);
+		assert_eq!(r.pending_conf_index, index + 1);
+	}
+
+	#[test]
+	fn test_step_ignore_config() {
+		let mut r = new_test_raft(1, vec![1, 2], 10, 1, MemStorage::new());
+		r.become_candidate();
+		r.become_leader();
+
+		let mut e = Entry::new();
+		e.set_entry_type(EntryType::EntryConfChange);
+		let m = new_message_with_entries(1, 1, MessageType::MsgProp, vec![e]);
+		let _ = r.step(m.clone());
+
+		let index = r.raft_log.last_index();
+		let pending_conf_index = r.pending_conf_index;
+		let _ = r.step(m);
+
+		let mut e = new_entry(1, 3);
+		e.set_entry_type(EntryType::EntryNormal);
+		let wents = vec![e];
+		let ents = r.raft_log.entries(index + 1, NO_LIMIT).unwrap();
+
+		assert_eq!(pending_conf_index, r.pending_conf_index);
+		assert_eq!(wents, ents);
+	}
+
+	#[test]
+	fn test_new_leader_pending_conf() {
+		let tests = vec![(false, 0), (true, 1)];
+
+		for (add_entry, wpending_conf_index) in tests {
+			let mut r = new_test_raft(1, vec![1, 2], 10, 1, MemStorage::new());
+			if add_entry {
+				let mut e = Entry::new();
+				e.set_entry_type(EntryType::EntryNormal);
+				r.append_entry(&mut vec![e]);
+			}
+			r.become_candidate();
+			r.become_leader();
+			assert_eq!(wpending_conf_index, r.pending_conf_index);
+		}
+	}
+
+	#[test]
+	fn test_add_node() {
+		let mut r = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+		r.add_node(2);
+		let nodes = r.nodes();
+		let wnode = vec![1, 2];
+		assert_eq!(nodes, wnode);
+	}
+
+	#[test]
+	fn test_add_learner() {
+		let mut r = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+		r.add_learner(2);
+		let nodes = r.learner_nodes();
+		let wnodes = vec![2];
+		assert_eq!(wnodes, nodes);
+		assert!(r.learner_prs.get(&2).unwrap().is_learner);
+	}
+
+	#[test]
+	fn test_add_node_check_quorum() {
+		let mut r = new_test_raft(1, vec![1], 10, 1, MemStorage::new());
+		r.check_quorum = true;
+
+		r.become_candidate();
+		r.become_leader();
+
+		for _ in 0..r.election_timeout - 1 {
+			r.tick();
+		}
+
+		r.add_node(2);
+
+		// This tick will reach electionTimeout, which triggers a quorum check.
+		r.tick();
+
+		// Node 1 should still be the leader after a single tick.
+		assert_eq!(r.state, StateType::Leader);
+		for _ in 0..r.election_timeout {
+			r.tick();
+		}
+
+		assert_eq!(r.state, StateType::Follower);
+	}
+
+	#[test]
+	fn test_remove_node() {
+		let mut r = new_test_raft(1, vec![1, 2], 10, 1, MemStorage::new());
+		r.remove_node(2);
+
+		let w = vec![1];
+		assert_eq!(w, r.nodes());
 	}
 
 	fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
