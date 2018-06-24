@@ -2677,7 +2677,7 @@ mod test {
 		)
 	}
 
-	fn next_ents(sm: &mut StateMachine, s: &mut MemStorage) -> Vec<Entry> {
+	fn next_ents<T: Storage>(sm: &mut Raft<T>, s: &mut MemStorage) -> Vec<Entry> {
 		let _ = s.append(&sm.raft_log.unstable_entries());
 		let (last_index, last_term) = (sm.raft_log.last_index(), sm.raft_log.last_term());
 		sm.raft_log.stable_to(last_index, last_term);
@@ -4450,6 +4450,91 @@ mod test {
 
 		let w = vec![1];
 		assert_eq!(w, r.nodes());
+	}
+
+	#[test]
+	fn test_remove_learner() {
+		let mut r = new_test_learner_raft(1, vec![1], vec![2], 10, 1, MemStorage::new());
+		r.remove_node(2);
+		assert_eq!(r.nodes(), vec![1]);
+		assert!(r.learner_nodes().is_empty());
+
+		r.remove_node(1);
+		assert!(r.nodes().is_empty());
+	}
+
+	#[test]
+	fn test_promotable() {
+		let id = 1;
+		let tests = vec![
+			(vec![1], true),
+			(vec![1, 2, 3], true),
+			(vec![], false),
+			(vec![2, 3], false),
+		];
+
+		for (peers, wp) in tests {
+			let mut r = new_test_raft(id, peers, 5, 1, MemStorage::new());
+			assert_eq!(r.promotable(), wp);
+		}
+	}
+
+	#[test]
+	fn test_raft_nodes() {
+		let tests = vec![
+			(vec![1, 2, 3], vec![1, 2, 3]),
+			(vec![3, 2, 1], vec![1, 2, 3]),
+		];
+
+		for (ids, wids) in tests {
+			let mut r = new_test_raft(1, ids, 10, 1, MemStorage::new());
+			assert_eq!(r.nodes(), wids);
+		}
+	}
+
+	#[test]
+	fn test_campaign_while_leader() {
+		campaign_while_leader(false)
+	}
+
+	#[test]
+	fn test_pre_campaign_while_leader() {
+		campaign_while_leader(true)
+	}
+
+	fn campaign_while_leader(pre_vote: bool) {
+		let mut cfg = new_test_config(1, vec![1], 5, 1);
+		cfg.pre_vote = pre_vote;
+
+		let mut r = Raft::new(&mut cfg, MemStorage::new());
+		assert_eq!(r.state, StateType::Follower);
+
+		let _ = r.step(new_message(1, 1, MessageType::MsgHup));
+		assert_eq!(r.state, StateType::Leader);
+
+		let term = r.term;
+		let _ = r.step(new_message(1, 1, MessageType::MsgHup));
+		assert_eq!(r.state, StateType::Leader);
+		assert_eq!(term, r.term);
+	}
+
+	use protobuf;
+	use raftpb::{ConfChange, ConfChangeType};
+	#[test]
+	fn test_commit_after_remove_node() {
+		let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new());
+		r.become_candidate();
+		r.become_leader();
+
+		let mut cc = ConfChange::new();
+		cc.set_change_type(ConfChangeType::ConfChangeRemoveNode);
+		cc.set_node_id(2);
+		let data = protobuf::Message::write_to_bytes(&cc).expect("unexpected marshal error");
+		let mut e = new_entry_with_data(data);
+		e.set_entry_type(EntryType::EntryConfChange);
+		let m = new_message_with_entries(NONE, NONE, MessageType::MsgProp, vec![e]);
+		let _ = r.step(m);
+		// next_ents(&mut r, &mut r.raft_log.storage);
 	}
 
 	fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
