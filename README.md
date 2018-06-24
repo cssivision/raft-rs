@@ -1,3 +1,3 @@
 # raft-rs
 
-Another raft implementation in rust-lang for learning raft algorithm.
+Another raft implementation in rust-lang for learning.
