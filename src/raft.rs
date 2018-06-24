@@ -2677,8 +2677,19 @@ mod test {
 		)
 	}
 
-	fn next_ents<T: Storage>(sm: &mut Raft<T>, s: &mut MemStorage) -> Vec<Entry> {
+	fn next_ents(sm: &mut Raft<MemStorage>, s: &mut MemStorage) -> Vec<Entry> {
 		let _ = s.append(&sm.raft_log.unstable_entries());
+		let (last_index, last_term) = (sm.raft_log.last_index(), sm.raft_log.last_term());
+		sm.raft_log.stable_to(last_index, last_term);
+		let ents = sm.raft_log.next_ents();
+		let committed = sm.raft_log.committed;
+		sm.raft_log.applied_to(committed);
+		ents
+	}
+
+	fn stable_ents(sm: &mut Raft<MemStorage>) -> Vec<Entry> {
+		let unstable_ents = sm.raft_log.unstable_entries();
+		let _ = sm.raft_log.storage.append(&unstable_ents);
 		let (last_index, last_term) = (sm.raft_log.last_index(), sm.raft_log.last_term());
 		sm.raft_log.stable_to(last_index, last_term);
 		let ents = sm.raft_log.next_ents();
@@ -4534,7 +4545,39 @@ mod test {
 		e.set_entry_type(EntryType::EntryConfChange);
 		let m = new_message_with_entries(NONE, NONE, MessageType::MsgProp, vec![e]);
 		let _ = r.step(m);
-		// next_ents(&mut r, &mut r.raft_log.storage);
+
+		// Stabilize the log and make sure nothing is committed yet.
+		assert_eq!(stable_ents(&mut r).len(), 0);
+
+		let cc_index = r.raft_log.last_index();
+
+		let mut e = new_entry_with_data(Vec::from("data"));
+		e.set_entry_type(EntryType::EntryNormal);
+
+		// While the config change is pending, make another proposal.
+		let _ = r.step(new_message_with_entries(
+			NONE,
+			NONE,
+			MessageType::MsgProp,
+			vec![e],
+		));
+
+		// Node 2 acknowledges the config change, committing it.
+		let mut m = new_message(2, NONE, MessageType::MsgAppResp);
+		m.set_index(cc_index);
+		let _ = r.step(m);
+
+		let ents = stable_ents(&mut r);
+		assert_eq!(ents.len(), 2);
+		assert_eq!(ents[0].get_entry_type(), EntryType::EntryNormal);
+		assert!(ents[0].get_data().is_empty());
+		assert_eq!(ents[1].get_entry_type(), EntryType::EntryConfChange);
+
+		r.remove_node(2);
+		let ents = stable_ents(&mut r);
+		assert_eq!(ents.len(), 1);
+		assert_eq!(ents[0].get_entry_type(), EntryType::EntryNormal);
+		assert_eq!(ents[0].get_data().to_vec(), Vec::from("data"));
 	}
 
 	fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
