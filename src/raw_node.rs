@@ -345,7 +345,7 @@ impl<T: Storage> RawNode<T> {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgTransferLeader);
         m.set_from(transferee);
-        self.raft.step(m).is_ok();
+        let _ = self.raft.step(m);
     }
 
     /// status returns the current status of the given group.

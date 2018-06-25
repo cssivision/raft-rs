@@ -4580,6 +4580,334 @@ mod test {
 		assert_eq!(ents[0].get_data().to_vec(), Vec::from("data"));
 	}
 
+	// TestLeaderTransferToUpToDateNode verifies transferring should succeed
+	// if the transferee has the most up-to-date log entries when transfer starts.
+	#[test]
+	fn test_leader_transfer_to_up_to_date_node() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+
+		nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 2);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+		nt.send(vec![new_message(1, 2, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_to_up_to_date_node_from_follower() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+
+		nt.send(vec![new_message(2, 2, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 2);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_with_check_quorum() {
+		let mut nt = Network::new(vec![None, None, None]);
+		for i in 1..4 {
+			nt.peers.get_mut(&i).unwrap().check_quorum = true;
+			nt.peers.get_mut(&i).unwrap().randomized_election_timeout =
+				nt.peers.get_mut(&i).unwrap().election_timeout + 1;
+		}
+
+		let timeout = nt.peers.get_mut(&2).unwrap().election_timeout;
+		for _ in 0..timeout {
+			nt.peers.get_mut(&2).unwrap().tick();
+		}
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(nt.peers.get_mut(&1).unwrap().lead, 1);
+
+		nt.send(vec![new_message(2, 2, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 2);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_to_slow_follwer() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+
+		nt.recover();
+
+		assert_eq!(nt.peers.get(&1).unwrap().prs.get(&3).unwrap().matched, 1);
+
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 3);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_after_snapshot() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+
+		next_ents(
+			nt.peers.get_mut(&1).unwrap(),
+			nt.storage.get_mut(&1).unwrap(),
+		);
+
+		let applied = nt.peers.get(&1).unwrap().raft_log.applied;
+
+		let mut cs = ConfState::new();
+		cs.set_nodes(nt.peers.get(&1).unwrap().nodes());
+		let _ = nt
+			.storage
+			.get(&1)
+			.unwrap()
+			.write_lock()
+			.create_snapshot(applied, Some(cs), vec![]);
+
+		let _ = nt.storage.get(&1).unwrap().write_lock().compact(applied);
+
+		nt.recover();
+
+		assert_eq!(nt.peers.get(&1).unwrap().prs.get(&3).unwrap().matched, 1);
+
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		nt.send(vec![new_message(3, 1, MessageType::MsgHeartbeatResp)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 3);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_to_self() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_to_non_existing_node() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.send(vec![new_message(4, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_timeout() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+
+		let heartbeat_timeout = nt.peers.get(&1).unwrap().heartbeat_timeout;
+		for _ in 0..heartbeat_timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+
+		let election_timeout = nt.peers.get(&1).unwrap().election_timeout;
+		for _ in 0..election_timeout - heartbeat_timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_ignore_proposal() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		)]);
+
+		let err = nt.peers.get_mut(&1).unwrap().step(new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![Entry::new()],
+		));
+
+		assert_eq!(err, Err(Error::ProposalDropped));
+		assert_eq!(nt.peers.get(&1).unwrap().prs.get(&1).unwrap().matched, 1);
+	}
+
+	#[test]
+	fn test_leader_transfer_receive_higher_term() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+
+		let mut m = new_message(2, 2, MessageType::MsgHup);
+		m.set_index(1);
+		m.set_term(2);
+		nt.send(vec![m]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 2);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_remove_node() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		nt.ignore(MessageType::MsgTimeoutNow);
+
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+		nt.peers.get_mut(&1).unwrap().remove_node(3);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_back() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_second_transfer_to_another_node() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+
+		nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 2);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_leader_transfer_second_transfer_to_same_node() {
+		let mut nt = Network::new(vec![None, None, None]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, 3);
+
+		let heartbeat_timeout = nt.peers.get(&1).unwrap().heartbeat_timeout;
+
+		for _ in 0..heartbeat_timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader)]);
+		let election_timeout = nt.peers.get(&1).unwrap().election_timeout;
+
+		for _ in 0..election_timeout - heartbeat_timeout {
+			nt.peers.get_mut(&1).unwrap().tick();
+		}
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&1).unwrap().lead, 1);
+		assert_eq!(nt.peers.get(&1).unwrap().lead_transferee, NONE);
+	}
+
+	#[test]
+	fn test_transfer_non_member() {
+		let mut r = new_test_raft(1, vec![2, 3, 4], 5, 1, MemStorage::new());
+		let _ = r.step(new_message(2, 1, MessageType::MsgTimeoutNow));
+		let _ = r.step(new_message(2, 1, MessageType::MsgVoteResp));
+		let _ = r.step(new_message(3, 1, MessageType::MsgVoteResp));
+		assert_eq!(r.state, StateType::Follower);
+	}
+
 	fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
 		let mut s = Snapshot::new();
 		let mut metadata = SnapshotMetadata::new();
