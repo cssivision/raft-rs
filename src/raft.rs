@@ -4921,6 +4921,183 @@ mod test {
 		s
 	}
 
+	// tests the scenario where a node
+	// that has been partitioned away (and fallen behind) rejoins the cluster at
+	// about the same time the leader node gets partitioned away.
+	// Previously the cluster would come to a standstill when run with PreVote
+	// enabled.
+	#[test]
+	fn test_node_with_smaller_term_can_complete_election() {
+		let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n3 = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+		n1.become_follower(1, NONE);
+		n2.become_follower(1, NONE);
+		n3.become_follower(1, NONE);
+
+		n1.pre_vote = true;
+		n2.pre_vote = true;
+		n3.pre_vote = true;
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(n1)),
+			Some(StateMachine::new(n2)),
+			Some(StateMachine::new(n3)),
+		]);
+
+		nt.cut(1, 3);
+		nt.cut(2, 3);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Follower);
+
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::PreCandidate);
+
+		nt.send(vec![new_message(2, 2, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().term, 3);
+		assert_eq!(nt.peers.get(&2).unwrap().term, 3);
+		assert_eq!(nt.peers.get(&3).unwrap().term, 1);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::PreCandidate);
+
+		nt.recover();
+		nt.cut(2, 1);
+		nt.cut(2, 3);
+
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+	}
+
+	#[test]
+	fn test_pre_vote_with_split_vote() {
+		let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n3 = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+
+		n1.become_follower(1, NONE);
+		n2.become_follower(1, NONE);
+		n3.become_follower(1, NONE);
+
+		n1.pre_vote = true;
+		n2.pre_vote = true;
+		n3.pre_vote = true;
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(n1)),
+			Some(StateMachine::new(n2)),
+			Some(StateMachine::new(n3)),
+		]);
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+		nt.isolate(1);
+
+		nt.send(vec![
+			new_message(2, 2, MessageType::MsgHup),
+			new_message(3, 3, MessageType::MsgHup),
+		]);
+
+		assert_eq!(nt.peers.get(&2).unwrap().term, 3);
+		assert_eq!(nt.peers.get(&3).unwrap().term, 3);
+
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Candidate);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::Candidate);
+	}
+
+	#[test]
+	fn test_pre_vote_migration_can_complete_election() {
+		let mut nt = new_pre_vote_migration_cluster();
+
+		nt.isolate(1);
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+		nt.send(vec![new_message(2, 2, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::PreCandidate);
+
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+		nt.send(vec![new_message(2, 2, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::Follower);
+	}
+
+	#[test]
+	fn test_pre_vote_migration_with_free_stuck_pre_candidate() {
+		let mut nt = new_pre_vote_migration_cluster();
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::PreCandidate);
+
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::PreCandidate);
+
+		let mut m = new_message(1, 3, MessageType::MsgHeartbeat);
+		m.set_term(nt.peers.get(&1).unwrap().term);
+		nt.send(vec![m]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Follower);
+		assert_eq!(
+			nt.peers.get(&1).unwrap().term,
+			nt.peers.get(&3).unwrap().term
+		);
+	}
+
+	fn new_pre_vote_migration_cluster() -> Network {
+		let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
+		let mut n3 = new_test_raft(3, vec![1, 2, 3], 10, 1, MemStorage::new());
+
+		n1.become_follower(1, NONE);
+		n2.become_follower(1, NONE);
+		n3.become_follower(1, NONE);
+
+		n1.pre_vote = true;
+		n2.pre_vote = true;
+
+		let mut nt = Network::new(vec![
+			Some(StateMachine::new(n1)),
+			Some(StateMachine::new(n2)),
+			Some(StateMachine::new(n3)),
+		]);
+
+		nt.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+
+		nt.isolate(3);
+		nt.send(vec![new_message_with_entries(
+			1,
+			1,
+			MessageType::MsgProp,
+			vec![new_entry_with_data(Vec::from("some data"))],
+		)]);
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+		nt.send(vec![new_message(3, 3, MessageType::MsgHup)]);
+
+		assert_eq!(nt.peers.get(&1).unwrap().state, StateType::Leader);
+		assert_eq!(nt.peers.get(&2).unwrap().state, StateType::Follower);
+		assert_eq!(nt.peers.get(&3).unwrap().state, StateType::Candidate);
+
+		assert_eq!(nt.peers.get(&1).unwrap().term, 2);
+		assert_eq!(nt.peers.get(&2).unwrap().term, 2);
+		assert_eq!(nt.peers.get(&3).unwrap().term, 4);
+
+		nt.peers.get_mut(&3).unwrap().pre_vote = true;
+		nt.recover();
+
+		nt
+	}
+
 	fn new_entry(term: u64, index: u64) -> Entry {
 		let mut e = Entry::new();
 		e.set_index(index);
