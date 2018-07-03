@@ -63,17 +63,106 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_is_local_msg() {}
+    fn test_is_local_msg() {
+        let tests = vec![
+            (MessageType::MsgHup, true),
+            (MessageType::MsgBeat, true),
+            (MessageType::MsgUnreachable, true),
+            (MessageType::MsgSnapStatus, true),
+            (MessageType::MsgCheckQuorum, true),
+            (MessageType::MsgTransferLeader, false),
+            (MessageType::MsgProp, false),
+            (MessageType::MsgApp, false),
+            (MessageType::MsgAppResp, false),
+            (MessageType::MsgVote, false),
+            (MessageType::MsgVoteResp, false),
+            (MessageType::MsgSnap, false),
+            (MessageType::MsgHeartbeat, false),
+            (MessageType::MsgHeartbeatResp, false),
+            (MessageType::MsgTimeoutNow, false),
+            (MessageType::MsgReadIndex, false),
+            (MessageType::MsgReadIndexResp, false),
+            (MessageType::MsgPreVote, false),
+            (MessageType::MsgPreVoteResp, false),
+        ];
+
+        for (msgt, is_local) in tests {
+            assert_eq!(is_local_msg(msgt), is_local);
+        }
+    }
 
     #[test]
-    fn test_is_response_msg() {}
+    fn test_is_response_msg() {
+        let tests = vec![
+            (MessageType::MsgHeartbeatResp, true),
+            (MessageType::MsgUnreachable, true),
+            (MessageType::MsgVoteResp, true),
+            (MessageType::MsgPreVoteResp, true),
+            (MessageType::MsgAppResp, true),
+            (MessageType::MsgHup, false),
+            (MessageType::MsgBeat, false),
+            (MessageType::MsgSnapStatus, false),
+            (MessageType::MsgCheckQuorum, false),
+            (MessageType::MsgTransferLeader, false),
+            (MessageType::MsgProp, false),
+            (MessageType::MsgApp, false),
+            (MessageType::MsgVote, false),
+            (MessageType::MsgSnap, false),
+            (MessageType::MsgHeartbeat, false),
+            (MessageType::MsgTimeoutNow, false),
+            (MessageType::MsgReadIndex, false),
+            (MessageType::MsgReadIndexResp, false),
+            (MessageType::MsgPreVote, false),
+        ];
+
+        for (msgt, is_local) in tests {
+            assert_eq!(is_response_msg(msgt), is_local);
+        }
+    }
 
     #[test]
-    fn test_vote_msg_resp_type() {}
+    fn test_vote_msg_resp_type() {
+        assert_eq!(
+            vote_msg_resp_type(MessageType::MsgVote),
+            MessageType::MsgVoteResp
+        );
+
+        assert_eq!(
+            vote_msg_resp_type(MessageType::MsgPreVote),
+            MessageType::MsgPreVoteResp
+        );
+    }
 
     #[test]
-    fn test_limit_size() {}
+    fn test_limit_size() {
+        let mut ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let tests = vec![
+            (
+                u64::MAX,
+                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)],
+            ),
+            (0, vec![new_entry(4, 4)]),
+            (
+                Message::compute_size(&ents[0]) as u64 + Message::compute_size(&ents[1]) as u64,
+                vec![new_entry(4, 4), new_entry(5, 5)],
+            ),
+            (
+                Message::compute_size(&ents[0]) as u64 + Message::compute_size(&ents[1]) as u64 - 1,
+                vec![new_entry(4, 4), new_entry(5, 5)],
+            ),
+        ];
 
-    #[test]
-    fn test_num_of_pending_conf() {}
+        for (max_size, wents) in tests {
+            let mut ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+            limit_size(&mut ents, max_size);
+            assert_eq!(ents, wents);
+        }
+    }
+
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::new();
+        e.set_index(index);
+        e.set_term(term);
+        e
+    }
 }
