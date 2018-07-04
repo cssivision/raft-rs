@@ -135,7 +135,7 @@ mod test {
 
     #[test]
     fn test_limit_size() {
-        let mut ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let tests = vec![
             (
                 u64::MAX,
@@ -147,8 +147,14 @@ mod test {
                 vec![new_entry(4, 4), new_entry(5, 5)],
             ),
             (
-                Message::compute_size(&ents[0]) as u64 + Message::compute_size(&ents[1]) as u64 - 1,
+                Message::compute_size(&ents[0]) as u64
+                    + Message::compute_size(&ents[1]) as u64
+                    + Message::compute_size(&ents[2]) as u64 - 1,
                 vec![new_entry(4, 4), new_entry(5, 5)],
+            ),
+            (
+                Message::compute_size(&ents[0]) as u64 + Message::compute_size(&ents[1]) as u64 - 1,
+                vec![new_entry(4, 4)],
             ),
         ];
 
