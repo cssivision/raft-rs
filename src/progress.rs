@@ -246,7 +246,7 @@ pub struct Inflights {
 }
 
 impl Inflights {
-    pub(crate) fn new(cap: usize) -> Inflights {
+    pub fn new(cap: usize) -> Inflights {
         Inflights {
             buffer: Vec::with_capacity(cap),
             ..Default::default()
@@ -258,7 +258,7 @@ impl Inflights {
         self.count = 0;
     }
 
-    pub(crate) fn full(&self) -> bool {
+    pub fn full(&self) -> bool {
         self.count == self.cap()
     }
 

@@ -353,17 +353,3 @@ impl<T: Storage> RawNode<T> {
         self.raft.get_status()
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use protobuf::ProtobufEnum;
-    use storage::MemStorage;
-
-    #[test]
-    fn test_raw_node_step() {
-        for msg_type in MessageType::values() {
-            let mut s = MemStorage::new();
-        }
-    }
-}

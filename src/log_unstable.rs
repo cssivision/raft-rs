@@ -15,7 +15,7 @@ pub struct Unstable {
 }
 
 impl Unstable {
-    pub(crate) fn new(offset: u64, tag: String) -> Unstable {
+    pub fn new(offset: u64, tag: String) -> Unstable {
         Unstable {
             snapshot: None,
             entries: vec![],
@@ -57,7 +57,8 @@ impl Unstable {
     // unstable entry or snapshot.
     pub(crate) fn maybe_last_index(&self) -> Option<u64> {
         match self.entries.len() {
-            0 => self.snapshot
+            0 => self
+                .snapshot
                 .as_ref()
                 .map(|snap| snap.get_metadata().get_index()),
             len => Some(self.offset + len as u64 - 1),

@@ -365,7 +365,7 @@ impl<T: Storage> RaftLog<T> {
         self.unstable.stable_snap_to(index);
     }
 
-    pub(crate) fn all_entries(&self) -> Vec<Entry> {
+    pub fn all_entries(&self) -> Vec<Entry> {
         let ents = self.entries(self.first_index(), NO_LIMIT);
         match ents {
             Ok(ents) => ents,
