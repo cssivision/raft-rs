@@ -251,7 +251,7 @@ impl<T: Storage> RawNode<T> {
         let mut e = Entry::new();
         e.set_data(rctx);
         m.set_entries(RepeatedField::from_vec(vec![e]));
-        self.raft.step(m).is_ok();
+        let _ = self.raft.step(m);
     }
 
     // apply_conf_change applies a config change to the local node.

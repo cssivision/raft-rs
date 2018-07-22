@@ -104,7 +104,7 @@ fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
     m
 }
 
-fn new_test_config(id: u64, peers: Vec<u64>, election: u64, heartbeat: u64) -> Config {
+pub fn new_test_config(id: u64, peers: Vec<u64>, election: u64, heartbeat: u64) -> Config {
     Config {
         id,
         peers,
