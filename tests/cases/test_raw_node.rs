@@ -37,10 +37,9 @@ mod test {
 
     #[test]
     fn test_raw_node_proposal_and_conf_change() {
-        let s = MemStorage::new();
         let mut raw_node = RawNode::new(
             &mut new_test_config(1, vec![], 10, 1),
-            s,
+            MemStorage::new(),
             vec![Peer {
                 context: Default::default(),
                 id: 1,
@@ -105,5 +104,68 @@ mod test {
         assert_eq!(ents[0].take_data(), Vec::from("somedata"));
         assert_eq!(ents[1].get_entry_type(), EntryType::EntryConfChange);
         assert_eq!(ents[1].take_data(), ccdata);
+    }
+
+    #[test]
+    fn test_raw_node_proposal_add_duplicate_node() {
+        let mut s = MemStorage::new();
+        let mut raw_node = RawNode::new(
+            &mut new_test_config(1, vec![], 10, 1),
+            s.clone(),
+            vec![Peer {
+                context: Default::default(),
+                id: 1,
+            }],
+        ).unwrap();
+
+        let rd = raw_node.ready();
+        let _ = s.append(&rd.entries);
+        raw_node.advance(rd);
+        let _ = raw_node.campaign();
+
+        loop {
+            let rd = raw_node.ready();
+            let _ = raw_node.raft.raft_log.storage.append(&rd.entries);
+            let lead = rd.soft_state.as_ref().unwrap().lead;
+            if lead == raw_node.raft.id {
+                raw_node.advance(rd);
+                break;
+            }
+            raw_node.advance(rd);
+        }
+
+        let mut propose_conf_change_and_apply = |cc: &ConfChange| {
+            let _ = raw_node.propose_conf_change(cc);
+            let rd = raw_node.ready();
+            let _ = s.write_lock().append(&rd.entries);
+            for e in &rd.committed_entries {
+                if e.get_entry_type() == EntryType::EntryConfChange {
+                    let conf_change = protobuf::parse_from_bytes(e.get_data()).unwrap();
+                    raw_node.apply_conf_change(&conf_change);
+                }
+            }
+
+            raw_node.advance(rd);
+        };
+
+        let mut cc1 = ConfChange::new();
+        cc1.set_change_type(ConfChangeType::ConfChangeAddNode);
+        cc1.set_node_id(1);
+        let ccdata1 = protobuf::Message::write_to_bytes(&cc1).expect("unexpected marshal error");
+        propose_conf_change_and_apply(&cc1);
+        propose_conf_change_and_apply(&cc1);
+
+        let mut cc2 = ConfChange::new();
+        cc2.set_change_type(ConfChangeType::ConfChangeAddNode);
+        cc2.set_node_id(1);
+        let ccdata2 = protobuf::Message::write_to_bytes(&cc2).expect("unexpected marshal error");
+
+        propose_conf_change_and_apply(&cc2);
+
+        let last_index = s.last_index().unwrap();
+        let mut entries = s.entries(last_index - 2, last_index + 1, NO_LIMIT).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].take_data(), ccdata1);
+        assert_eq!(entries[2].take_data(), ccdata2);
     }
 }
