@@ -26,7 +26,7 @@ const CAMPAIGN_ELECTION: &[u8] = b"CampaignElection";
 // CAMPAIGN_TRANSFER represents the type of leader transfer.
 const CAMPAIGN_TRANSFER: &[u8] = b"CampaignTransfer";
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Status {
 	pub id: u64,
 	pub hard_state: HardState,

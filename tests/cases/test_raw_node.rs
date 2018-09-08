@@ -1,6 +1,9 @@
 use libraft::errors::Error;
-use libraft::raft::{Peer, StateType, NONE};
-use libraft::raftpb::{ConfChange, ConfChangeType, EntryType, HardState, Message, MessageType};
+use libraft::raft::{Peer, StateType, Status, NONE};
+use libraft::raftpb::{
+    ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState, Message, MessageType,
+    Snapshot, SnapshotMetadata,
+};
 use libraft::raw_node::RawNode;
 use libraft::read_only::ReadState;
 use libraft::storage::{MemStorage, Storage};
@@ -272,11 +275,108 @@ mod test {
     }
 
     #[test]
-    fn test_raw_node_restart() {}
+    fn test_raw_node_restart() {
+        let mut st = HardState::new();
+        st.set_term(1);
+        st.set_commit(1);
+        let mut e1 = Entry::new();
+        e1.set_term(1);
+        e1.set_index(1);
+        let mut e2 = Entry::new();
+        e2.set_term(1);
+        e2.set_index(2);
+        e2.set_data(Vec::from("foo"));
+        let entries = vec![e1];
+        let mut s = MemStorage::new();
+        s.set_hard_state(st);
+        let _ = s.append(&entries);
+
+        let mut c = new_test_config(1, vec![], 10, 1);
+        let mut raw_node = RawNode::new(
+            &mut c,
+            s.clone(),
+            vec![Peer {
+                context: Default::default(),
+                id: 1,
+            }],
+        ).unwrap();
+
+        let rd = raw_node.ready();
+        assert_eq!(rd.hard_state, HardState::new());
+        assert_eq!(rd.committed_entries.len(), 1);
+        assert_eq!(rd.committed_entries[0].get_term(), 1);
+        assert_eq!(rd.committed_entries[0].get_index(), 1);
+        assert_eq!(rd.must_sync, true);
+        raw_node.advance(rd);
+        assert_eq!(raw_node.has_ready(), false);
+    }
 
     #[test]
-    fn test_raw_node_from_snapshot() {}
+    fn test_raw_node_restart_from_snapshot() {
+        let mut snap = Snapshot::new();
+        let mut md = SnapshotMetadata::new();
+        let mut cs = ConfState::new();
+        cs.set_nodes(vec![1, 2]);
+        md.set_index(2);
+        md.set_term(1);
+        md.set_conf_state(cs);
+        snap.set_metadata(md);
+        let mut st = HardState::new();
+        st.set_term(1);
+        st.set_commit(3);
+        let mut e2 = Entry::new();
+        e2.set_term(1);
+        e2.set_index(3);
+        e2.set_data(Vec::from("foo"));
+        let entries = vec![e2];
+        let mut s = MemStorage::new();
+        s.set_hard_state(st);
+        let _ = s.apply_snapshot(snap);
+        let _ = s.append(&entries);
+
+        let mut c = new_test_config(1, vec![], 10, 1);
+        let mut raw_node = RawNode::new(
+            &mut c,
+            s.clone(),
+            vec![Peer {
+                context: Default::default(),
+                id: 1,
+            }],
+        ).unwrap();
+
+        let rd = raw_node.ready();
+        assert_eq!(rd.hard_state, HardState::new());
+        assert_eq!(rd.committed_entries.len(), 1);
+        assert_eq!(rd.committed_entries[0].get_term(), 1);
+        assert_eq!(rd.committed_entries[0].get_index(), 3);
+        assert_eq!(rd.must_sync, true);
+        raw_node.advance(rd);
+        assert_eq!(raw_node.has_ready(), false);
+    }
 
     #[test]
-    fn test_raw_node_status() {}
+    fn test_raw_node_status() {
+        let mut c = new_test_config(1, vec![], 10, 1);
+        let raw_node = RawNode::new(
+            &mut c,
+            MemStorage::new(),
+            vec![Peer {
+                context: Default::default(),
+                id: 1,
+            }],
+        ).unwrap();
+
+        let status = raw_node.status();
+        let mut hs = HardState::new();
+        hs.set_commit(1);
+        hs.set_term(1);
+        assert_eq!(
+            status,
+            Status {
+                id: 1,
+                hard_state: hs,
+                ..Default::default()
+            }
+        );
+    }
 }

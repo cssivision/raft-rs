@@ -301,8 +301,8 @@ impl<T: Storage> RawNode<T> {
             return true;
         }
 
-        if self.raft.raft_log.snapshot().is_ok()
-            && self.raft.raft_log.snapshot().unwrap() != Snapshot::new()
+        if self.raft.raft_log.unstable.snapshot.as_ref().is_some()
+            && self.raft.raft_log.unstable.snapshot.as_ref().unwrap() != &Snapshot::new()
         {
             return true;
         }

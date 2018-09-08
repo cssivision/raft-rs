@@ -92,7 +92,7 @@ impl Default for ProgressState {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Progress {
     pub matched: u64,
     pub next: u64,
