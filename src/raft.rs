@@ -258,7 +258,7 @@ impl<T: Storage> Raft<T> {
 
 		if !conf_state.get_nodes().is_empty() || !conf_state.get_learners().is_empty() {
 			if !peers.is_empty() || !learners.is_empty() {
-				panic!("cannot specify both new(peers, learners) and ConfState.(Nodes, Learners)");
+				panic!("cannot specify both new(peers, learners) and ConfState.(nodes, learners)");
 			}
 
 			peers = &conf_state.get_nodes();

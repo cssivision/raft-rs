@@ -2,6 +2,7 @@ use libraft::errors::Error;
 use libraft::raft::{Peer, StateType, NONE};
 use libraft::raftpb::{ConfChange, ConfChangeType, EntryType, HardState, Message, MessageType};
 use libraft::raw_node::RawNode;
+use libraft::read_only::ReadState;
 use libraft::storage::{MemStorage, Storage};
 use libraft::util::{is_local_msg, NO_LIMIT};
 
@@ -37,9 +38,10 @@ mod test {
 
     #[test]
     fn test_raw_node_proposal_and_conf_change() {
+        let mut s = MemStorage::new();
         let mut raw_node = RawNode::new(
             &mut new_test_config(1, vec![], 10, 1),
-            MemStorage::new(),
+            s.clone(),
             vec![Peer {
                 context: Default::default(),
                 id: 1,
@@ -63,7 +65,7 @@ mod test {
         assert_eq!(rd.hard_state.vote, NONE);
         assert_eq!(rd.hard_state.commit, 1);
 
-        let _ = raw_node.raft.raft_log.storage.append(&rd.entries);
+        let _ = s.append(&rd.entries);
         raw_node.advance(rd);
         let _ = raw_node.campaign();
 
@@ -73,7 +75,7 @@ mod test {
 
         loop {
             let rd = raw_node.ready();
-            let _ = raw_node.raft.raft_log.storage.append(&rd.entries);
+            let _ = s.append(&rd.entries);
             if !proposed && rd.soft_state.as_ref().unwrap().lead == raw_node.raft.id {
                 let _ = raw_node.propose(Vec::from("somedata"));
                 let mut cc = ConfChange::new();
@@ -86,19 +88,13 @@ mod test {
             }
 
             raw_node.advance(rd);
-
-            last_index = raw_node.raft.raft_log.storage.last_index().unwrap();
+            last_index = s.last_index().unwrap();
             if last_index >= 4 {
                 break;
             }
         }
 
-        let mut ents = raw_node
-            .raft
-            .raft_log
-            .storage
-            .entries(last_index - 1, last_index + 1, NO_LIMIT)
-            .unwrap();
+        let mut ents = s.entries(last_index - 1, last_index + 1, NO_LIMIT).unwrap();
 
         assert_eq!(ents.len(), 2);
         assert_eq!(ents[0].take_data(), Vec::from("somedata"));
@@ -106,6 +102,8 @@ mod test {
         assert_eq!(ents[1].take_data(), ccdata);
     }
 
+    // ensures that two proposes to add the same node should
+    // not affect the later propose to add new node.
     #[test]
     fn test_raw_node_proposal_add_duplicate_node() {
         let mut s = MemStorage::new();
@@ -125,7 +123,7 @@ mod test {
 
         loop {
             let rd = raw_node.ready();
-            let _ = raw_node.raft.raft_log.storage.append(&rd.entries);
+            let _ = s.append(&rd.entries);
             let lead = rd.soft_state.as_ref().unwrap().lead;
             if lead == raw_node.raft.id {
                 raw_node.advance(rd);
@@ -157,7 +155,7 @@ mod test {
 
         let mut cc2 = ConfChange::new();
         cc2.set_change_type(ConfChangeType::ConfChangeAddNode);
-        cc2.set_node_id(1);
+        cc2.set_node_id(2);
         let ccdata2 = protobuf::Message::write_to_bytes(&cc2).expect("unexpected marshal error");
 
         propose_conf_change_and_apply(&cc2);
@@ -168,4 +166,117 @@ mod test {
         assert_eq!(entries[0].take_data(), ccdata1);
         assert_eq!(entries[2].take_data(), ccdata2);
     }
+
+    #[test]
+    fn test_raw_node_read_index() {
+        let wrs = vec![ReadState {
+            index: 1,
+            request_ctx: Vec::from("somedata"),
+        }];
+
+        let mut s = MemStorage::new();
+        let mut c = new_test_config(1, vec![], 10, 1);
+        let mut raw_node = RawNode::new(
+            &mut c,
+            s.clone(),
+            vec![Peer {
+                context: Default::default(),
+                id: 1,
+            }],
+        ).unwrap();
+
+        raw_node.raft.read_states = wrs.clone();
+        let has_ready = raw_node.has_ready();
+        assert!(has_ready);
+
+        let rd = raw_node.ready();
+        assert_eq!(rd.read_states, wrs);
+
+        let _ = s.append(&rd.entries);
+        raw_node.advance(rd);
+
+        assert!(raw_node.raft.read_states.is_empty());
+
+        let wrequest_ctx = Vec::from("somedata2");
+        let _ = raw_node.campaign();
+
+        loop {
+            let rd = raw_node.ready();
+            let _ = s.append(&rd.entries);
+
+            if rd.soft_state.as_ref().unwrap().lead == raw_node.raft.id {
+                raw_node.advance(rd);
+
+                raw_node.read_index(wrequest_ctx.clone());
+                break;
+            }
+
+            raw_node.advance(rd);
+        }
+
+        assert_eq!(raw_node.raft.read_states.len(), 1);
+        assert_eq!(raw_node.raft.read_states[0].request_ctx, wrequest_ctx);
+    }
+
+    #[test]
+    fn test_raw_node_start() {
+        let mut s = MemStorage::new();
+        let mut c = new_test_config(1, vec![], 10, 1);
+        let mut raw_node = RawNode::new(
+            &mut c,
+            s.clone(),
+            vec![Peer {
+                context: Default::default(),
+                id: 1,
+            }],
+        ).unwrap();
+
+        let rd = raw_node.ready();
+
+        assert_eq!(rd.hard_state.get_term(), 1);
+        assert_eq!(rd.hard_state.get_commit(), 1);
+        assert_eq!(rd.hard_state.get_vote(), 0);
+        assert_eq!(rd.must_sync, true);
+
+        let mut cc = ConfChange::new();
+        cc.set_change_type(ConfChangeType::ConfChangeAddNode);
+        cc.set_node_id(1);
+        let ccdata = protobuf::Message::write_to_bytes(&cc).expect("unexpected marshal error");
+        assert_eq!(rd.entries.len(), 1);
+        assert_eq!(rd.entries[0].get_entry_type(), EntryType::EntryConfChange);
+        assert_eq!(rd.entries[0].get_term(), 1);
+        assert_eq!(rd.entries[0].get_index(), 1);
+        assert_eq!(Vec::from(rd.entries[0].get_data()), ccdata);
+
+        let _ = s.append(&rd.entries);
+        raw_node.advance(rd.clone());
+        let _ = s.append(&rd.entries);
+        raw_node.advance(rd);
+        let _ = raw_node.campaign();
+        let rd = raw_node.ready();
+        let _ = s.append(&rd.entries);
+        raw_node.advance(rd.clone());
+
+        let _ = raw_node.propose(Vec::from("foo"));
+        let rd = raw_node.ready();
+
+        assert_eq!(rd.hard_state.get_term(), 2);
+        assert_eq!(rd.hard_state.get_commit(), 3);
+        assert_eq!(rd.hard_state.get_vote(), 1);
+        assert_eq!(rd.must_sync, true);
+
+        assert_eq!(rd.entries.len(), 1);
+        assert_eq!(rd.entries[0].get_term(), 2);
+        assert_eq!(rd.entries[0].get_index(), 3);
+        assert_eq!(Vec::from(rd.entries[0].get_data()), Vec::from("foo"));
+    }
+
+    #[test]
+    fn test_raw_node_restart() {}
+
+    #[test]
+    fn test_raw_node_from_snapshot() {}
+
+    #[test]
+    fn test_raw_node_status() {}
 }

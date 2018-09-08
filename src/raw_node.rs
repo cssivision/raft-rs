@@ -19,7 +19,7 @@ pub enum SnapshotStatus {
 
 /// SoftState provides state that is useful for logging and debugging.
 /// The state is volatile and does not need to be persisted to the WAL.
-#[derive(Default, PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug, Clone)]
 pub struct SoftState {
     pub lead: u64,
     pub raft_state: StateType,
@@ -34,7 +34,7 @@ pub struct RawNode<T: Storage> {
 /// Ready encapsulates the entries and messages that are ready to read,
 /// be saved to stable storage, committed or sent to other peers.
 /// All fields in Ready are read-only.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub struct Ready {
     /// The current volatile state of a Node.
     /// SoftState will be nil if there is no update.
