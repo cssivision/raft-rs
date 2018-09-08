@@ -19,6 +19,19 @@ use libraft::util::{vote_msg_resp_type, NO_LIMIT};
 use protobuf::{self, RepeatedField};
 use rand::{self, Rng};
 
+pub fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
+    let mut s = Snapshot::new();
+    let mut metadata = SnapshotMetadata::new();
+    metadata.set_index(index);
+    metadata.set_term(term);
+    let mut conf_state = ConfState::new();
+    conf_state.set_learners(learners);
+    conf_state.set_nodes(nodes);
+    metadata.set_conf_state(conf_state);
+    s.set_metadata(metadata);
+    s
+}
+
 pub fn new_pre_vote_migration_cluster() -> Network {
     let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
     let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, MemStorage::new());
@@ -116,7 +129,7 @@ pub fn new_test_config(id: u64, peers: Vec<u64>, election: u64, heartbeat: u64) 
     }
 }
 
-fn new_test_raft<T: Storage>(
+pub fn new_test_raft<T: Storage>(
     id: u64,
     peers: Vec<u64>,
     election: u64,
@@ -3176,19 +3189,6 @@ mod test {
         let _ = r.step(new_message(2, 1, MessageType::MsgVoteResp));
         let _ = r.step(new_message(3, 1, MessageType::MsgVoteResp));
         assert_eq!(r.state, StateType::Follower);
-    }
-
-    fn new_snapshot(index: u64, term: u64, learners: Vec<u64>, nodes: Vec<u64>) -> Snapshot {
-        let mut s = Snapshot::new();
-        let mut metadata = SnapshotMetadata::new();
-        metadata.set_index(index);
-        metadata.set_term(term);
-        let mut conf_state = ConfState::new();
-        conf_state.set_learners(learners);
-        conf_state.set_nodes(nodes);
-        metadata.set_conf_state(conf_state);
-        s.set_metadata(metadata);
-        s
     }
 
     // tests the scenario where a node
