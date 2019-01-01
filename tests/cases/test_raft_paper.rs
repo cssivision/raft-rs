@@ -1,7 +1,7 @@
 use libraft::raft::StateType;
 use cases::test_raft::new_test_raft;
 use libraft::storage::{MemStorage, Storage};
-use libraft::raftpb::{Message, MessageType};
+use libraft::raftpb::{Message, MessageType, HardState, Entry};
 
 // tests that if one server’s current term is
 // smaller than the other’s, then it updates its current term to the larger
@@ -45,4 +45,57 @@ fn test_candidate_update_term_from_message() {
 #[test]
 fn test_leader_update_term_from_message() {
     update_term_from_message(StateType::Leader);
+}
+
+// tests that if a server receives a request with
+// a stale term number, it rejects the request.
+// Our implementation ignores the request instead.
+// Reference: section 5.1
+#[test]
+fn test_reject_stale_term_message() {
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+    let mut hd = HardState::new();
+    hd.set_term(2);
+    r.load_state(&hd);
+
+    let mut m = Message::new();
+    m.set_msg_type(MessageType::MsgApp);
+    m.set_term(r.term-1);
+    let _ = r.step(m);
+}
+
+#[test]
+fn test_start_as_follower() {
+    let r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+    assert_eq!(r.state, StateType::Follower);
+}
+
+
+// tests that if the leader receives a heartbeat tick,
+// it will send a MsgHeartbeat with m.Index = 0, m.LogTerm=0 and empty entries
+// as heartbeat to all followers.
+// Reference: section 5.2
+#[test]
+fn test_leader_bcast_beat() {
+    // heartbeat interval
+	let hi = 1;
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+    r.become_candidate();
+    r.become_leader();
+
+    for i in 0..10 {
+        let mut e = Entry::new();
+        e.set_index(i+1);
+        r.append_entry(&mut vec![e]);
+    }
+
+    for _ in 0..hi {
+        r.tick();
+    }
+
+    let msgs: Vec<Message> = r.msgs.drain(..).collect();
+    assert_eq!(msgs.len(), 2);
+    for m in msgs {
+        assert_eq!(m.get_msg_type(), MessageType::MsgHeartbeat);
+    }
 }
