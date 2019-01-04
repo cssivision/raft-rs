@@ -153,7 +153,6 @@ fn non_leader_start_election(state: StateType) {
         assert_eq!(msgs[i].get_msg_type(), MessageType::MsgVote);
         assert_eq!(msgs[i].get_from(), 1);
         assert_eq!(msgs[i].get_term(), 2);
-        assert_eq!(msgs[i].get_to(), 2+i as u64);
     }
 }
 
