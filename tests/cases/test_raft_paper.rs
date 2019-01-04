@@ -93,9 +93,77 @@ fn test_leader_bcast_beat() {
         r.tick();
     }
 
-    let msgs: Vec<Message> = r.msgs.drain(..).collect();
+    let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+    msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to()));
     assert_eq!(msgs.len(), 2);
     for m in msgs {
         assert_eq!(m.get_msg_type(), MessageType::MsgHeartbeat);
+        assert_eq!(m.get_from(), 1);
+        assert_eq!(m.get_term(), 1);
     }
+}
+
+#[test]
+fn test_follower_start_election() {
+    non_leader_start_election(StateType::Follower);
+}
+
+#[test]
+fn test_candidate_start_election() {
+    non_leader_start_election(StateType::Candidate);
+}
+
+// tests that if a follower receives no communication
+// over election timeout, it begins an election to choose a new leader. It
+// increments its current term and transitions to candidate state. It then
+// votes for itself and issues RequestVote RPCs in parallel to each of the
+// other servers in the cluster.
+// Reference: section 5.2
+// Also if a candidate fails to obtain a majority, it will time out and
+// start a new election by incrementing its term and initiating another
+// round of RequestVote RPCs.
+// Reference: section 5.2
+fn non_leader_start_election(state: StateType) {
+    let et = 10;
+    let mut r = new_test_raft(1, vec![1, 2, 3], et, 1, MemStorage::new());
+
+    match state {
+        StateType::Follower => {
+            r.become_follower(1, 2);
+        },
+        StateType::Candidate => {
+            r.become_candidate();
+        },
+        _ => {}
+    }
+
+    for _ in 0..2*et {
+        r.tick();
+    }
+
+    assert_eq!(r.term, 2);
+    assert_eq!(r.state, StateType::Candidate);
+    assert_eq!(r.votes.get(&r.id).unwrap(), &true);
+
+    let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+    msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to())); 
+
+    assert_eq!(msgs.len(), 2);
+    for i in 0..2 {
+        assert_eq!(msgs[i].get_msg_type(), MessageType::MsgVote);
+        assert_eq!(msgs[i].get_from(), 1);
+        assert_eq!(msgs[i].get_term(), 2);
+        assert_eq!(msgs[i].get_to(), 2+i as u64);
+    }
+}
+
+// tests all cases that may happen in
+// leader election during one round of RequestVote RPC:
+// a) it wins the election
+// b) it loses the election
+// c) it is unclear about the result
+// Reference: section 5.2
+#[test]
+fn test_leader_election_in_one_round_rpc() {
+    
 }
