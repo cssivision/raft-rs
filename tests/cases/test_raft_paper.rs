@@ -1,7 +1,9 @@
-use libraft::raft::StateType;
+use std::collections::HashMap;
+
 use cases::test_raft::new_test_raft;
+use libraft::raft::StateType;
+use libraft::raftpb::{Entry, HardState, Message, MessageType};
 use libraft::storage::{MemStorage, Storage};
-use libraft::raftpb::{Message, MessageType, HardState, Entry};
 
 // tests that if one server’s current term is
 // smaller than the other’s, then it updates its current term to the larger
@@ -13,14 +15,14 @@ fn update_term_from_message(state: StateType) {
     match state {
         StateType::Follower => {
             r.become_follower(1, 2);
-        },
+        }
         StateType::Candidate => {
             r.become_candidate();
-        },
+        }
         StateType::Leader => {
             r.become_candidate();
             r.become_leader();
-        },
+        }
         _ => {}
     }
 
@@ -60,7 +62,7 @@ fn test_reject_stale_term_message() {
 
     let mut m = Message::new();
     m.set_msg_type(MessageType::MsgApp);
-    m.set_term(r.term-1);
+    m.set_term(r.term - 1);
     let _ = r.step(m);
 }
 
@@ -70,7 +72,6 @@ fn test_start_as_follower() {
     assert_eq!(r.state, StateType::Follower);
 }
 
-
 // tests that if the leader receives a heartbeat tick,
 // it will send a MsgHeartbeat with m.Index = 0, m.LogTerm=0 and empty entries
 // as heartbeat to all followers.
@@ -78,14 +79,14 @@ fn test_start_as_follower() {
 #[test]
 fn test_leader_bcast_beat() {
     // heartbeat interval
-	let hi = 1;
+    let hi = 1;
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
     r.become_candidate();
     r.become_leader();
 
     for i in 0..10 {
         let mut e = Entry::new();
-        e.set_index(i+1);
+        e.set_index(i + 1);
         r.append_entry(&mut vec![e]);
     }
 
@@ -130,14 +131,14 @@ fn non_leader_start_election(state: StateType) {
     match state {
         StateType::Follower => {
             r.become_follower(1, 2);
-        },
+        }
         StateType::Candidate => {
             r.become_candidate();
-        },
+        }
         _ => {}
     }
 
-    for _ in 0..2*et {
+    for _ in 0..2 * et {
         r.tick();
     }
 
@@ -146,7 +147,7 @@ fn non_leader_start_election(state: StateType) {
     assert_eq!(r.votes.get(&r.id).unwrap(), &true);
 
     let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
-    msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to())); 
+    msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to()));
 
     assert_eq!(msgs.len(), 2);
     for i in 0..2 {
@@ -164,5 +165,54 @@ fn non_leader_start_election(state: StateType) {
 // Reference: section 5.2
 #[test]
 fn test_leader_election_in_one_round_rpc() {
-    
+    let tests = vec![
+        (1, vec![], StateType::Leader),
+        (3, vec![(2, true), (3, true)], StateType::Leader),
+        (3, vec![(2, true)], StateType::Leader),
+        (
+            5,
+            vec![(2, true), (3, true), (4, true), (5, true)],
+            StateType::Leader,
+        ),
+        (5, vec![(2, true), (3, true), (4, true)], StateType::Leader),
+        (5, vec![(2, true), (3, true)], StateType::Leader),
+        (3, vec![(2, false), (3, false)], StateType::Follower),
+        (
+            5,
+            vec![(2, false), (3, false), (4, false), (5, false)],
+            StateType::Follower,
+        ),
+        (
+            5,
+            vec![(2, true), (3, false), (4, false), (5, false)],
+            StateType::Follower,
+        ),
+        (3, vec![], StateType::Candidate),
+        (5, vec![(2, true)], StateType::Candidate),
+        (5, vec![(2, false), (3, false)], StateType::Candidate),
+        (5, vec![], StateType::Candidate),
+    ];
+
+    for (size, votes, state) in tests {
+        let ids: Vec<u64> = (1..size + 1).collect();
+        let mut r = new_test_raft(1, ids, 10, 1, MemStorage::new());
+        let mut m = Message::new();
+        m.set_from(1);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgHup);
+        let _ = r.step(m);
+
+        for (id, vote) in votes {
+            let mut m = Message::new();
+            m.set_from(id);
+            m.set_to(1);
+            m.set_msg_type(MessageType::MsgVoteResp);
+            m.set_term(r.term);
+            m.set_reject(!vote);
+            let _ = r.step(m);
+        }
+
+        assert_eq!(state, r.state);
+        assert_eq!(r.term, 1);
+    }
 }
