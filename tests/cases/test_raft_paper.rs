@@ -1,7 +1,5 @@
-use std::collections::HashMap;
-
 use cases::test_raft::new_test_raft;
-use libraft::raft::StateType;
+use libraft::raft::{StateType, NONE};
 use libraft::raftpb::{Entry, HardState, Message, MessageType};
 use libraft::storage::{MemStorage, Storage};
 
@@ -214,5 +212,42 @@ fn test_leader_election_in_one_round_rpc() {
 
         assert_eq!(state, r.state);
         assert_eq!(r.term, 1);
+    }
+}
+
+// tests that each follower will vote for at most one
+// candidate in a given term, on a first-come-first-served basis.
+// Reference: section 5.2
+#[test]
+fn test_follower_vote() {
+    let tests = vec![
+        (NONE, 1, false),
+        (NONE, 2, false),
+        (1, 1, false),
+        (2, 2, false),
+        (1, 2, true),
+        (2, 1, true),
+    ];
+
+    for (vote, nvote, wreject) in tests {
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+        let mut hd = HardState::new();
+        hd.set_term(1);
+        hd.set_vote(vote);
+        r.load_state(&hd);
+
+        let mut m = Message::new();
+        m.set_from(nvote);
+        m.set_to(1);
+        m.set_term(1);
+        m.set_msg_type(MessageType::MsgVote);
+
+        let _ = r.step(m);
+        let msgs: Vec<Message> = r.msgs.drain(..).collect();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].get_from(), 1);
+        assert_eq!(msgs[0].get_to(), nvote);
+        assert_eq!(msgs[0].get_msg_type(), MessageType::MsgVoteResp);
+        assert_eq!(msgs[0].get_reject(), wreject);
     }
 }
