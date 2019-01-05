@@ -136,7 +136,7 @@ fn non_leader_start_election(state: StateType) {
         _ => {}
     }
 
-    for _ in 0..2 * et {
+    for _ in 1..2 * et {
         r.tick();
     }
 
@@ -249,5 +249,39 @@ fn test_follower_vote() {
         assert_eq!(msgs[0].get_to(), nvote);
         assert_eq!(msgs[0].get_msg_type(), MessageType::MsgVoteResp);
         assert_eq!(msgs[0].get_reject(), wreject);
+    }
+}
+
+// tests that while waiting for votes,
+// if a candidate receives an AppendEntries RPC from another server claiming
+// to be leader whose term is at least as large as the candidate's current term,
+// it recognizes the leader as legitimate and returns to follower state.
+// Reference: section 5.2
+#[test]
+fn test_candidate_fallback() {
+    let mut m = Message::new();
+    m.set_from(2);
+    m.set_to(1);
+    m.set_term(1);
+    m.set_msg_type(MessageType::MsgApp);
+    let mut tests = vec![m.clone()];
+    let mut m2 = m.clone();
+    m2.set_term(2);
+    tests.push(m2);
+
+    for mm in tests {
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+        let mut m = Message::new();
+        m.set_from(1);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgHup);
+
+        let _ = r.step(m);
+        assert_eq!(r.state, StateType::Candidate);
+
+        let term = mm.get_term();
+        let _ = r.step(mm);
+        assert_eq!(r.state, StateType::Follower);
+        assert_eq!(r.term, term);
     }
 }
