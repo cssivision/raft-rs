@@ -335,7 +335,61 @@ fn non_leader_eletion_timeout_randomized(state: StateType) {
     }
 }
 
+#[test]
+fn follower_leader_election_timeout_non_conflict() {
+    non_leader_election_timeout_non_conflict(StateType::Follower);
+}
+
+#[test]
+fn candidate_leader_election_timeout_non_conflict() {
+    non_leader_election_timeout_non_conflict(StateType::Candidate);
+}
+
 // tests that in most cases only a
 // single server(follower or candidate) will time out, which reduces the
 // likelihood of split vote in the new election.
 // Reference: section 5.2
+fn non_leader_election_timeout_non_conflict(state: StateType) {
+    let et = 10;
+    let size = 5;
+    let mut rs = vec![];
+    let ids: Vec<u64> = (1..size as u64 + 1).collect();
+
+    for i in 0..size {
+        rs.push(new_test_raft(ids[i], ids.clone(), et, 1, MemStorage::new()));
+    }
+
+    let mut conflicts = 0;
+
+    for _ in 0..1000 {
+        for r in rs.iter_mut() {
+            let term = r.term;
+            match state {
+                StateType::Follower => {
+                    r.become_follower(term, NONE);
+                }
+                StateType::Candidate => {
+                    r.become_candidate();
+                }
+                _ => {}
+            }
+        }
+
+        let mut timeout_num = 0;
+        while timeout_num == 0 {
+            for r in rs.iter_mut() {
+                r.tick();
+                let msgs: Vec<Message> = r.msgs.drain(..).collect();
+                if !msgs.is_empty() {
+                    timeout_num += 1;
+                }
+            }
+        }
+
+        if timeout_num > 1 {
+            conflicts += 1;
+        }
+    }
+
+    assert!(conflicts as f64 / 1000.0 <= 0.3);
+}
