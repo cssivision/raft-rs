@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cases::test_raft::new_test_raft;
 use libraft::raft::{StateType, NONE};
 use libraft::raftpb::{Entry, HardState, Message, MessageType};
@@ -285,3 +287,55 @@ fn test_candidate_fallback() {
         assert_eq!(r.term, term);
     }
 }
+
+#[test]
+fn test_follower_election_timeout_randomized() {
+    non_leader_eletion_timeout_randomized(StateType::Follower);
+}
+
+// tests that election timeout for
+// follower or candidate is randomized.
+// Reference: section 5.2
+#[test]
+fn test_candidate_election_timeout_randomized() {
+    non_leader_eletion_timeout_randomized(StateType::Candidate);
+}
+
+fn non_leader_eletion_timeout_randomized(state: StateType) {
+    let et = 10;
+    let mut r = new_test_raft(1, vec![1, 2, 3], et, 1, MemStorage::new());
+    let mut timeout = HashMap::new();
+
+    for _ in 0..50 * et {
+        let term = r.term;
+        match state {
+            StateType::Follower => {
+                r.become_follower(term + 1, 2);
+            }
+            StateType::Candidate => {
+                r.become_candidate();
+            }
+            _ => {}
+        }
+
+        let mut time = 0;
+        loop {
+            let msgs: Vec<Message> = r.msgs.drain(..).collect();
+            if !msgs.is_empty() {
+                break;
+            }
+            r.tick();
+            time += 1;
+        }
+        timeout.insert(time, true);
+    }
+
+    for i in et + 1..2 * et {
+        assert!(timeout.contains_key(&i));
+    }
+}
+
+// tests that in most cases only a
+// single server(follower or candidate) will time out, which reduces the
+// likelihood of split vote in the new election.
+// Reference: section 5.2
