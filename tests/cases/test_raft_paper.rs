@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use cases::test_raft::new_test_raft;
-use libraft::raft::{StateType, NONE};
+use libraft::raft::{StateType, NONE, Raft};
 use libraft::raftpb::{Entry, HardState, Message, MessageType};
 use libraft::storage::{MemStorage, Storage};
+use protobuf::RepeatedField;
 
 // tests that if one server’s current term is
 // smaller than the other’s, then it updates its current term to the larger
@@ -392,4 +393,92 @@ fn non_leader_election_timeout_non_conflict(state: StateType) {
     }
 
     assert!(conflicts as f64 / 1000.0 <= 0.3);
+}
+
+// tests that when receiving client proposals,
+// the leader appends the proposal to its log as a new entry, then issues
+// AppendEntries RPCs in parallel to each of the other servers to replicate
+// the entry. Also, when sending an AppendEntries RPC, the leader includes
+// the index and term of the entry in its log that immediately precedes
+// the new entries.
+// Also, it writes the new entry into stable storage.
+// Reference: section 5.3
+#[test]
+fn test_leader_start_replication() {
+    let s = MemStorage::new();
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s.clone());
+    r.become_candidate();
+    r.become_leader();
+    commit_noop_entry(&mut r, s.clone());
+
+    let li = r.raft_log.last_index();
+    assert_eq!(li, 1);
+
+    let mut e = Entry::new();
+    e.set_data(Vec::from("some data"));
+    let ents = vec![e];
+    let mut m = Message::new();
+    m.set_from(1);
+    m.set_to(1);
+    m.set_msg_type(MessageType::MsgProp);
+    m.set_entries(RepeatedField::from_vec(ents));
+
+    let _ = r.step(m);
+    assert_eq!(r.raft_log.last_index(), li+1);
+    assert_eq!(r.raft_log.committed, li);
+
+    let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+    msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to()));
+    assert_eq!(msgs[0].get_to(), 2);
+    assert_eq!(msgs[1].get_to(), 3);
+
+    for m in msgs {
+        assert_eq!(m.get_from(), 1);
+        assert_eq!(m.get_term(), 1);
+        assert_eq!(m.get_msg_type(), MessageType::MsgApp);
+        assert_eq!(m.get_log_term(), 1);
+        assert_eq!(m.get_commit(), li);
+        assert_eq!(m.get_index(), li);
+    }
+}
+
+fn commit_noop_entry<T: Storage>(r: &mut Raft<T>, mut s: MemStorage) {
+    if r.state != StateType::Leader {
+        panic!("it should only be used when it is the leader")
+    }
+
+    r.bcast_append();
+
+    let msgs: Vec<Message> = r.msgs.drain(..).collect();
+    for m in msgs {
+        if m.get_msg_type() != MessageType::MsgApp || 
+            m.get_entries().len() != 1 || 
+            m.get_entries()[0].get_data().len() != 0 {
+            panic!("not a message to append noop entry");
+        }
+        let _ = r.step(accept_and_reply(m));
+    }
+
+    let _: Vec<Message> = r.msgs.drain(..).collect();
+    let _ = s.append(&r.raft_log.unstable_entries());
+    let committed = r.raft_log.committed;
+    assert_eq!(committed, 1);
+    r.raft_log.applied_to(committed);
+    let last_index = r.raft_log.last_index();
+    let last_term = r.raft_log.last_term();
+    r.raft_log.stable_to(last_index, last_term);
+}
+
+fn accept_and_reply(m: Message) -> Message {
+    if m.get_msg_type() != MessageType::MsgApp {
+        panic!("type should be MsgApp");
+    }
+
+    let mut mm = Message::new();
+    mm.set_from(m.get_to());
+    mm.set_to(m.get_from());
+    mm.set_term(m.get_term());
+    mm.set_msg_type(MessageType::MsgAppResp);
+    mm.set_index(m.get_index() + m.get_entries().len() as u64);
+    return mm
 }
