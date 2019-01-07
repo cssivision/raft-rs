@@ -237,10 +237,6 @@ pub struct Raft<T: Storage> {
 
 	/// tag only used for logger.
 	tag: String,
-
-	/// Will be called when step** is about to be called.
-	/// return false will skip step**.
-	pub before_step_state: Option<Box<FnMut(&Message) -> bool>>,
 }
 
 impl<T: Storage> Raft<T> {
@@ -292,7 +288,6 @@ impl<T: Storage> Raft<T> {
 			randomized_election_timeout: Default::default(),
 			tag: c.tag.clone(),
 			disable_proposal_forwarding: c.disable_proposal_forwarding,
-			before_step_state: None,
 		};
 
 		for &p in peers {
