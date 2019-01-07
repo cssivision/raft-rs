@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::iter::Iterator;
 
 use cases::test_raft::new_test_raft;
 use libraft::raft::{StateType, NONE, Raft};
@@ -439,6 +440,58 @@ fn test_leader_start_replication() {
         assert_eq!(m.get_log_term(), 1);
         assert_eq!(m.get_commit(), li);
         assert_eq!(m.get_index(), li);
+    }
+}
+
+
+// tests that when the entry has been safely replicated,
+// the leader gives out the applied entries, which can be applied to its state
+// machine.
+// Also, the leader keeps track of the highest index it knows to be committed,
+// and it includes that index in future AppendEntries RPCs so that the other
+// servers eventually find out.
+// Reference: section 5.3
+#[test] 
+fn test_leader_commit_entry() {
+    let s = MemStorage::new();
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s.clone());
+    r.become_candidate();
+    r.become_leader();
+    commit_noop_entry(&mut r, s.clone());
+    let li = r.raft_log.last_index();
+
+    let mut e = Entry::new();
+    e.set_data(Vec::from("some data"));
+    let ents = vec![e];
+    let mut m = Message::new();
+    m.set_from(1);
+    m.set_to(1);
+    m.set_msg_type(MessageType::MsgProp);
+    m.set_entries(RepeatedField::from_vec(ents));
+
+    let _ = r.step(m);
+
+    let msgs: Vec<Message> = r.msgs.drain(..).collect();
+
+    for m in msgs {
+        let _ = r.step(accept_and_reply(m));
+    }
+
+    assert_eq!(r.raft_log.committed, li+1);
+    
+    let ents = r.raft_log.next_ents();
+    assert_eq!(ents.len(), 1);
+    assert_eq!(ents[0].get_index(), li+1);
+    assert_eq!(ents[0].get_term(), 1);
+    assert_eq!(ents[0].get_data().to_vec(), Vec::from("some data"));
+
+    let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+    msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to()));
+
+    for (i, m) in msgs.iter().enumerate() {
+        assert_eq!(m.get_msg_type(), MessageType::MsgApp);
+        assert_eq!(i as u64 + 2, m.get_to());
+        assert_eq!(li+1, m.get_commit());
     }
 }
 
