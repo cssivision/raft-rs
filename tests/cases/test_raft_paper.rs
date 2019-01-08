@@ -495,6 +495,61 @@ fn test_leader_commit_entry() {
     }
 }
 
+// tests that a log entry is committed once the
+// leader that created the entry has replicated it on a majority of the servers.
+// Reference: section 5.3
+#[test]
+fn test_leader_acknowledge_commit() {
+    let tests = vec![
+        (1, vec![], true),
+        (3, vec![], false),
+        (3, vec![(2, true)], true),
+        (3, vec![(2, true), (3, true)], true),
+        (5, vec![], false),
+        (5, vec![(2, true)], false),
+        (5, vec![(2, true), (3, true)], true),
+        (5, vec![(2, true), (3, true), (4, true)], true),
+        (5, vec![(2, true), (3, true), (4, true), (5, true)], true),
+    ];
+
+    for (size, acceptors, wack) in tests {
+        let s = MemStorage::new();
+        let mut r = new_test_raft(1, (1..size+1).collect(), 10, 1, s.clone());
+        r.become_candidate();
+        r.become_leader();
+        commit_noop_entry(&mut r, s.clone());
+
+        let li = r.raft_log.last_index();
+        assert_eq!(li, 1);
+        assert_eq!(r.raft_log.committed, 1);
+
+        let mut e = Entry::new();
+        e.set_data(Vec::from("some data"));
+        let ents = vec![e];
+
+        let mut m = Message::new();
+        m.set_from(1);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgProp);
+        m.set_entries(RepeatedField::from_vec(ents));
+        let _ = r.step(m);
+
+        let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+        msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to()));
+
+        for m in msgs {
+            for (to, ack) in &acceptors {
+                if *to == m.get_to() && *ack {
+                    let _ = r.step(accept_and_reply(m));
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(r.raft_log.committed>li, wack);
+    }
+}
+
 fn commit_noop_entry<T: Storage>(r: &mut Raft<T>, mut s: MemStorage) {
     if r.state != StateType::Leader {
         panic!("it should only be used when it is the leader")
