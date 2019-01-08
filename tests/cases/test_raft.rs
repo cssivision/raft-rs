@@ -76,7 +76,7 @@ pub fn new_pre_vote_migration_cluster() -> Network {
     nt
 }
 
-fn new_entry(term: u64, index: u64) -> Entry {
+pub fn new_entry(term: u64, index: u64) -> Entry {
     let mut e = Entry::new();
     e.set_index(index);
     e.set_term(term);

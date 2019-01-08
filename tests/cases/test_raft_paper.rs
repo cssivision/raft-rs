@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::iter::Iterator;
 
-use cases::test_raft::new_test_raft;
+use cases::test_raft::{new_test_raft, new_entry};
 use libraft::raft::{StateType, NONE, Raft};
 use libraft::raftpb::{Entry, HardState, Message, MessageType};
 use libraft::storage::{MemStorage, Storage};
@@ -547,6 +547,54 @@ fn test_leader_acknowledge_commit() {
         }
 
         assert_eq!(r.raft_log.committed>li, wack);
+    }
+}
+
+// tests that when leader commits a log entry,
+// it also commits all preceding entries in the leader’s log, including
+// entries created by previous leaders.
+// Also, it applies the entry to its local state machine (in log order).
+// Reference: section 5.3
+#[test]
+fn test_leader_commit_preceding_entries() {
+    let tests = vec![
+        vec![],
+        vec![new_entry(2, 1)],
+        vec![new_entry(1, 1), new_entry(2, 2)],
+        vec![new_entry(1, 1)],
+    ];
+
+    for mut tt in tests {
+        let mut s = MemStorage::new();
+        let _ = s.append(&tt);
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s);
+        let mut hd = HardState::new();
+        hd.set_term(2);
+        r.load_state(&hd);
+        r.become_candidate();
+        r.become_leader();
+
+        let mut e = Entry::new();
+        e.set_data(Vec::from("some data"));
+        let mut ents = vec![e];
+
+        let mut m = Message::new();
+        m.set_from(1);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgProp);
+        m.set_entries(RepeatedField::from_vec(ents.clone()));
+        let _ = r.step(m);
+
+        let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+        for m in msgs {
+            let _ = r.step(accept_and_reply(m));
+        }
+
+        let li = tt.len() as u64;
+        let mut e = new_entry(3, li + 2);
+        e.set_data(Vec::from("some data"));
+        tt.extend_from_slice(&vec![new_entry(3, li + 1), e]);
+        assert_eq!(tt, r.raft_log.next_ents());
     }
 }
 
