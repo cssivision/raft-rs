@@ -598,6 +598,112 @@ fn test_leader_commit_preceding_entries() {
     }
 }
 
+// tests that once a follower learns that a log entry
+// is committed, it applies the entry to its local state machine (in log order).
+// Reference: section 5.3
+#[test]
+fn test_follower_commit_entry() {
+    let tests = vec![
+        (vec![new_entry_with_data(1, 1, Vec::from("some data"))], 1),
+        (
+            vec![
+                new_entry_with_data(1, 1, Vec::from("some data")), 
+                new_entry_with_data(1, 2, Vec::from("some data2"))
+            ], 
+            2
+        ),
+        (
+            vec![
+                new_entry_with_data(1, 1, Vec::from("some data2")), 
+                new_entry_with_data(1, 2, Vec::from("some data"))
+            ], 
+            2
+        ),
+        (
+            vec![
+                new_entry_with_data(1, 1, Vec::from("some data")), 
+                new_entry_with_data(1, 2, Vec::from("some data2"))
+            ], 
+            1
+        ),
+    ];
+
+    for (ents, commit) in tests {
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+        r.become_follower(1, 2);
+
+        let mut m = Message::new();
+        m.set_from(2);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgApp);
+        m.set_term(1);
+        m.set_entries(RepeatedField::from_vec(ents.clone()));
+        m.set_commit(commit);
+
+        let _ = r.step(m);
+        assert_eq!(r.raft_log.committed, commit);
+
+        let wents = r.raft_log.next_ents();
+        assert_eq!(wents, ents[..commit as usize].to_vec());
+    }
+}
+
+// tests that if the follower does not find an
+// entry in its log with the same index and term as the one in AppendEntries RPC,
+// then it refuses the new entries. Otherwise it replies that it accepts the
+// append entries.
+// Reference: section 5.3
+#[test]
+fn test_follower_check_msg_app() {
+    let ents = vec![new_entry(1, 1), new_entry(2, 2)];
+
+    let tests = vec![
+        (0, 0, 1, false, 0),
+        (ents[0].get_term(), ents[0].get_index(), 1, false, 0),
+        (ents[1].get_term(), ents[1].get_index(), 2, false, 0),
+        (ents[0].get_term(), ents[1].get_index(), ents[1].get_index(), true, 2),
+        (ents[0].get_term() + 1, ents[1].get_index() + 1, ents[1].get_index() + 1, true, 2),
+    ];
+
+    for (term, index, windex, wreject, wreject_hint) in tests {
+        let mut s = MemStorage::new();
+        let _ = s.append(&ents);
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s);
+        let mut hd = HardState::new();
+        hd.set_commit(1);
+        r.load_state(&hd);
+        r.become_follower(2, 2);
+
+        let mut m = Message::new();
+        m.set_from(2);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgApp);
+        m.set_term(2);
+        m.set_log_term(term);
+        m.set_index(index);
+        let _ = r.step(m);
+        let msgs: Vec<Message> = r.msgs.drain(..).collect();
+
+        let mut m1 = Message::new();
+        m1.set_from(1);
+        m1.set_to(2);
+        m1.set_msg_type(MessageType::MsgAppResp);
+        m1.set_term(2);
+        m1.set_index(windex);
+        m1.set_reject(wreject);
+        m1.set_reject_hint(wreject_hint);
+
+        let wmsgs = vec![m1];
+        assert_eq!(wmsgs, msgs);
+    }
+}
+
+fn new_entry_with_data(term: u64, index: u64, data: Vec<u8>) -> Entry {
+    let mut e = new_entry(term, index);
+    e.set_data(data);
+    e 
+}
+
 fn commit_noop_entry<T: Storage>(r: &mut Raft<T>, mut s: MemStorage) {
     if r.state != StateType::Leader {
         panic!("it should only be used when it is the leader")
