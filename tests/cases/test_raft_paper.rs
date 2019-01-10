@@ -1004,7 +1004,34 @@ fn test_voter() {
 // current term are committed by counting replicas.
 // Reference: section 5.4.2
 #[test]
-fn test_leader_only_commit_log_from_current_term() {}
+fn test_leader_only_commit_log_from_current_term() {
+    let ents = vec![new_entry(1, 1), new_entry(2, 2)];
+    let tests = vec![(1, 0), (2, 0), (3, 3)];
+
+    for (index, wcommit) in tests {
+        let mut s = MemStorage::new();
+        let _ = s.append(&ents);
+        let mut r = new_test_raft(1, vec![1, 2], 10, 1, s);
+        let mut hd = HardState::new();
+        hd.set_term(2);
+        r.load_state(&hd);
+        r.become_candidate();
+        r.become_leader();
+        let _: Vec<Message> = r.msgs.drain(..).collect();
+
+        let _ = r.step(new_message_with_entries(
+            1,
+            1,
+            MessageType::MsgProp,
+            vec![Entry::new()],
+        ));
+        let mut m = new_message(2, 1, MessageType::MsgAppResp);
+        m.set_term(r.term);
+        m.set_index(index);
+        let _ = r.step(m);
+        assert_eq!(r.raft_log.committed, wcommit);
+    }
+}
 
 fn new_entry_with_data(term: u64, index: u64, data: Vec<u8>) -> Entry {
     let mut e = new_entry(term, index);
