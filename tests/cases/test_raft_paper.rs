@@ -951,13 +951,60 @@ fn test_vote_request() {
             assert_eq!(m.get_msg_type(), MessageType::MsgVote);
             assert_eq!(m.get_to(), i as u64 + 2);
             assert_eq!(m.get_term(), wterm);
-            let windex = ents[ents.len()-1].get_index();
-            let wlog_term = ents[ents.len()-1].get_term();
+            let windex = ents[ents.len() - 1].get_index();
+            let wlog_term = ents[ents.len() - 1].get_term();
             assert_eq!(windex, m.get_index());
             assert_eq!(wlog_term, m.get_log_term());
         }
     }
 }
+
+// tests the voter denies its vote if its own log is more up-to-date
+// than that of the candidate.
+// Reference: section 5.4.1
+#[test]
+fn test_voter() {
+    let tests = vec![
+        // same logterm
+        (vec![new_entry(1, 1)], 1, 1, false),
+        (vec![new_entry(1, 1)], 1, 2, false),
+        (vec![new_entry(1, 1), new_entry(1, 2)], 1, 1, true),
+        // candidate higher logterm
+        (vec![new_entry(1, 1)], 2, 1, false),
+        (vec![new_entry(1, 1)], 2, 2, false),
+        (vec![new_entry(1, 1), new_entry(1, 2)], 2, 1, false),
+        // voter higher logterm
+        (vec![new_entry(2, 1)], 1, 1, true),
+        (vec![new_entry(2, 1)], 1, 2, true),
+        (vec![new_entry(2, 1), new_entry(1, 2)], 1, 1, true),
+    ];
+
+    for (ents, log_term, index, wreject) in tests {
+        let mut s = MemStorage::new();
+        let _ = s.append(&ents);
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s);
+        let mut m = Message::new();
+        m.set_from(2);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgVote);
+        m.set_term(3);
+        m.set_log_term(log_term);
+        m.set_index(index);
+
+        let _ = r.step(m);
+
+        let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].get_msg_type(), MessageType::MsgVoteResp);
+        assert_eq!(msgs[0].get_reject(), wreject);
+    }
+}
+
+// tests that only log entries from the leader’s
+// current term are committed by counting replicas.
+// Reference: section 5.4.2
+#[test]
+fn test_leader_only_commit_log_from_current_term() {}
 
 fn new_entry_with_data(term: u64, index: u64, data: Vec<u8>) -> Entry {
     let mut e = new_entry(term, index);
