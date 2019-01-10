@@ -915,6 +915,50 @@ fn test_leader_sync_follower_log() {
     }
 }
 
+// that the vote request includes information about the candidate’s log
+// and are sent to all of the other nodes.
+// Reference: section 5.4.1
+#[test]
+fn test_vote_request() {
+    let tests = vec![
+        (vec![new_entry(1, 1)], 2),
+        (vec![new_entry(1, 1), new_entry(2, 2)], 2),
+    ];
+
+    for (ents, wterm) in tests {
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new());
+        let mut m = Message::new();
+        m.set_from(2);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgApp);
+        m.set_term(wterm - 1);
+        m.set_log_term(0);
+        m.set_index(0);
+        m.set_entries(RepeatedField::from_vec(ents.clone()));
+        let _ = r.step(m);
+
+        let _: Vec<Message> = r.msgs.drain(..).collect();
+
+        for _ in 0..r.election_timeout * 2 {
+            r.tick();
+        }
+
+        let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
+        msgs.sort_by(|a, b| a.get_to().cmp(&b.get_to()));
+        assert_eq!(msgs.len(), 2);
+
+        for (i, m) in msgs.iter().enumerate() {
+            assert_eq!(m.get_msg_type(), MessageType::MsgVote);
+            assert_eq!(m.get_to(), i as u64 + 2);
+            assert_eq!(m.get_term(), wterm);
+            let windex = ents[ents.len()-1].get_index();
+            let wlog_term = ents[ents.len()-1].get_term();
+            assert_eq!(windex, m.get_index());
+            assert_eq!(wlog_term, m.get_log_term());
+        }
+    }
+}
+
 fn new_entry_with_data(term: u64, index: u64, data: Vec<u8>) -> Entry {
     let mut e = new_entry(term, index);
     e.set_data(data);
