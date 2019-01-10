@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::iter::Iterator;
 
-use cases::test_raft::{new_test_raft, new_entry};
-use libraft::raft::{StateType, NONE, Raft};
+use cases::test_raft::{new_entry, new_test_raft};
+use libraft::raft::{Raft, StateType, NONE};
 use libraft::raftpb::{Entry, HardState, Message, MessageType};
 use libraft::storage::{MemStorage, Storage};
 use protobuf::RepeatedField;
@@ -425,7 +425,7 @@ fn test_leader_start_replication() {
     m.set_entries(RepeatedField::from_vec(ents));
 
     let _ = r.step(m);
-    assert_eq!(r.raft_log.last_index(), li+1);
+    assert_eq!(r.raft_log.last_index(), li + 1);
     assert_eq!(r.raft_log.committed, li);
 
     let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
@@ -443,7 +443,6 @@ fn test_leader_start_replication() {
     }
 }
 
-
 // tests that when the entry has been safely replicated,
 // the leader gives out the applied entries, which can be applied to its state
 // machine.
@@ -451,7 +450,7 @@ fn test_leader_start_replication() {
 // and it includes that index in future AppendEntries RPCs so that the other
 // servers eventually find out.
 // Reference: section 5.3
-#[test] 
+#[test]
 fn test_leader_commit_entry() {
     let s = MemStorage::new();
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s.clone());
@@ -477,11 +476,11 @@ fn test_leader_commit_entry() {
         let _ = r.step(accept_and_reply(m));
     }
 
-    assert_eq!(r.raft_log.committed, li+1);
-    
+    assert_eq!(r.raft_log.committed, li + 1);
+
     let ents = r.raft_log.next_ents();
     assert_eq!(ents.len(), 1);
-    assert_eq!(ents[0].get_index(), li+1);
+    assert_eq!(ents[0].get_index(), li + 1);
     assert_eq!(ents[0].get_term(), 1);
     assert_eq!(ents[0].get_data().to_vec(), Vec::from("some data"));
 
@@ -491,7 +490,7 @@ fn test_leader_commit_entry() {
     for (i, m) in msgs.iter().enumerate() {
         assert_eq!(m.get_msg_type(), MessageType::MsgApp);
         assert_eq!(i as u64 + 2, m.get_to());
-        assert_eq!(li+1, m.get_commit());
+        assert_eq!(li + 1, m.get_commit());
     }
 }
 
@@ -514,7 +513,7 @@ fn test_leader_acknowledge_commit() {
 
     for (size, acceptors, wack) in tests {
         let s = MemStorage::new();
-        let mut r = new_test_raft(1, (1..size+1).collect(), 10, 1, s.clone());
+        let mut r = new_test_raft(1, (1..size + 1).collect(), 10, 1, s.clone());
         r.become_candidate();
         r.become_leader();
         commit_noop_entry(&mut r, s.clone());
@@ -546,7 +545,7 @@ fn test_leader_acknowledge_commit() {
             }
         }
 
-        assert_eq!(r.raft_log.committed>li, wack);
+        assert_eq!(r.raft_log.committed > li, wack);
     }
 }
 
@@ -607,24 +606,24 @@ fn test_follower_commit_entry() {
         (vec![new_entry_with_data(1, 1, Vec::from("some data"))], 1),
         (
             vec![
-                new_entry_with_data(1, 1, Vec::from("some data")), 
-                new_entry_with_data(1, 2, Vec::from("some data2"))
-            ], 
-            2
+                new_entry_with_data(1, 1, Vec::from("some data")),
+                new_entry_with_data(1, 2, Vec::from("some data2")),
+            ],
+            2,
         ),
         (
             vec![
-                new_entry_with_data(1, 1, Vec::from("some data2")), 
-                new_entry_with_data(1, 2, Vec::from("some data"))
-            ], 
-            2
+                new_entry_with_data(1, 1, Vec::from("some data2")),
+                new_entry_with_data(1, 2, Vec::from("some data")),
+            ],
+            2,
         ),
         (
             vec![
-                new_entry_with_data(1, 1, Vec::from("some data")), 
-                new_entry_with_data(1, 2, Vec::from("some data2"))
-            ], 
-            1
+                new_entry_with_data(1, 1, Vec::from("some data")),
+                new_entry_with_data(1, 2, Vec::from("some data2")),
+            ],
+            1,
         ),
     ];
 
@@ -661,8 +660,20 @@ fn test_follower_check_msg_app() {
         (0, 0, 1, false, 0),
         (ents[0].get_term(), ents[0].get_index(), 1, false, 0),
         (ents[1].get_term(), ents[1].get_index(), 2, false, 0),
-        (ents[0].get_term(), ents[1].get_index(), ents[1].get_index(), true, 2),
-        (ents[0].get_term() + 1, ents[1].get_index() + 1, ents[1].get_index() + 1, true, 2),
+        (
+            ents[0].get_term(),
+            ents[1].get_index(),
+            ents[1].get_index(),
+            true,
+            2,
+        ),
+        (
+            ents[0].get_term() + 1,
+            ents[1].get_index() + 1,
+            ents[1].get_index() + 1,
+            true,
+            2,
+        ),
     ];
 
     for (term, index, windex, wreject, wreject_hint) in tests {
@@ -698,10 +709,70 @@ fn test_follower_check_msg_app() {
     }
 }
 
+// tests that when AppendEntries RPC is valid,
+// the follower will delete the existing conflict entry and all that follow it,
+// and append any new entries not already in the log.
+// Also, it writes the new entry into stable storage.
+// Reference: section 5.3
+#[test]
+fn test_follower_append_entries() {
+    let tests = vec![
+        (
+            2,
+            2,
+            vec![new_entry(3, 3)],
+            vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)],
+            vec![new_entry(3, 3)],
+        ),
+        (
+            1,
+            1,
+            vec![new_entry(3, 2), new_entry(4, 3)],
+            vec![new_entry(1, 1), new_entry(3, 2), new_entry(4, 3)],
+            vec![new_entry(3, 2), new_entry(4, 3)],
+        ),
+        (
+            0,
+            0,
+            vec![new_entry(1, 1)],
+            vec![new_entry(1, 1), new_entry(2, 2)],
+            vec![],
+        ),
+        (
+            0,
+            0,
+            vec![new_entry(3, 1)],
+            vec![new_entry(3, 1)],
+            vec![new_entry(3, 1)],
+        ),
+    ];
+
+    for (term, index, ents, wents, wunstable) in tests {
+        let mut s = MemStorage::new();
+        let _ = s.append(&vec![new_entry(1, 1), new_entry(2, 2)]);
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s);
+        r.become_follower(2, 2);
+
+        let mut m = Message::new();
+        m.set_from(2);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgApp);
+        m.set_term(2);
+        m.set_log_term(term);
+        m.set_index(index);
+        m.set_entries(RepeatedField::from_vec(ents));
+
+        let _ = r.step(m);
+
+        assert_eq!(r.raft_log.all_entries(), wents);
+        assert_eq!(r.raft_log.unstable_entries(), wunstable);
+    }
+}
+
 fn new_entry_with_data(term: u64, index: u64, data: Vec<u8>) -> Entry {
     let mut e = new_entry(term, index);
     e.set_data(data);
-    e 
+    e
 }
 
 fn commit_noop_entry<T: Storage>(r: &mut Raft<T>, mut s: MemStorage) {
@@ -713,9 +784,10 @@ fn commit_noop_entry<T: Storage>(r: &mut Raft<T>, mut s: MemStorage) {
 
     let msgs: Vec<Message> = r.msgs.drain(..).collect();
     for m in msgs {
-        if m.get_msg_type() != MessageType::MsgApp || 
-            m.get_entries().len() != 1 || 
-            m.get_entries()[0].get_data().len() != 0 {
+        if m.get_msg_type() != MessageType::MsgApp
+            || m.get_entries().len() != 1
+            || m.get_entries()[0].get_data().len() != 0
+        {
             panic!("not a message to append noop entry");
         }
         let _ = r.step(accept_and_reply(m));
@@ -742,5 +814,5 @@ fn accept_and_reply(m: Message) -> Message {
     mm.set_term(m.get_term());
     mm.set_msg_type(MessageType::MsgAppResp);
     mm.set_index(m.get_index() + m.get_entries().len() as u64);
-    return mm
+    return mm;
 }
