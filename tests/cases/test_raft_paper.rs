@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::iter::Iterator;
 
-use cases::test_raft::{new_entry, new_test_raft};
+use cases::test_raft::{
+    ltoa, new_entry, new_message, new_message_with_entries, new_test_raft, Network, StateMachine,
+    NOP_STEPPER,
+};
 use libraft::raft::{Raft, StateType, NONE};
 use libraft::raftpb::{Entry, HardState, Message, MessageType};
 use libraft::storage::{MemStorage, Storage};
@@ -766,6 +769,87 @@ fn test_follower_append_entries() {
 
         assert_eq!(r.raft_log.all_entries(), wents);
         assert_eq!(r.raft_log.unstable_entries(), wunstable);
+    }
+}
+
+// tests that the leader could bring a follower's log
+// into consistency with its own.
+// Reference: section 5.3, figure 7
+#[test]
+fn test_leader_sync_follower_log() {
+    let ents = vec![
+        Entry::new(),
+        new_entry(1, 1),
+        new_entry(1, 2),
+        new_entry(1, 3),
+        new_entry(4, 4),
+        new_entry(4, 5),
+        new_entry(5, 6),
+        new_entry(5, 7),
+        new_entry(6, 8),
+        new_entry(6, 9),
+        new_entry(6, 10),
+    ];
+
+    let term: u64 = 8;
+
+    let tests = vec![vec![
+        Entry::new(),
+        new_entry(1, 1),
+        new_entry(1, 2),
+        new_entry(1, 3),
+        new_entry(4, 4),
+        new_entry(4, 5),
+        new_entry(5, 6),
+        new_entry(5, 7),
+        new_entry(6, 8),
+        new_entry(6, 9),
+    ]];
+
+    for tents in tests {
+        let mut lead_storage = MemStorage::new();
+        let _ = lead_storage.append(&ents);
+        let mut lead = new_test_raft(1, vec![1, 2, 3], 10, 1, lead_storage);
+        let mut hd = HardState::new();
+        hd.set_commit(lead.raft_log.last_index());
+        hd.set_term(term);
+
+        lead.load_state(&hd);
+
+        let mut follower_storage = MemStorage::new();
+        let _ = follower_storage.append(&tents);
+        let mut follower = new_test_raft(2, vec![1, 2, 3], 10, 1, follower_storage);
+        let mut fhd = HardState::new();
+        fhd.set_term(term - 1);
+        follower.load_state(&fhd);
+
+        // It is necessary to have a three-node cluster.
+        // The second may have more up-to-date log than the first one, so the
+        // first node needs the vote from the third node to become the leader.
+        let mut n = Network::new(vec![
+            Some(StateMachine::new(lead)),
+            Some(StateMachine::new(follower)),
+            NOP_STEPPER,
+        ]);
+
+        n.send(vec![new_message(1, 1, MessageType::MsgHup)]);
+        // The election occurs in the term after the one we loaded with
+        // lead.loadState above.
+
+        let mut m = new_message(3, 1, MessageType::MsgVoteResp);
+        m.set_term(term + 1);
+        n.send(vec![m]);
+        n.send(vec![new_message_with_entries(
+            1,
+            1,
+            MessageType::MsgProp,
+            vec![Entry::new()],
+        )]);
+
+        assert_eq!(
+            ltoa(&n.peers.get(&1).unwrap().raft_log),
+            ltoa(&n.peers.get(&2).unwrap().raft_log)
+        );
     }
 }
 

@@ -83,7 +83,7 @@ pub fn new_entry(term: u64, index: u64) -> Entry {
     e
 }
 
-fn ltoa<T: Storage>(l: &RaftLog<T>) -> String {
+pub fn ltoa<T: Storage>(l: &RaftLog<T>) -> String {
     let mut s = format!("committed: {}\n", l.committed);
     s.push_str(&format!("applied:  {}\n", l.applied));
     for (i, e) in l.all_entries().iter().enumerate() {
@@ -98,7 +98,7 @@ fn new_entry_with_data(data: Vec<u8>) -> Entry {
     e
 }
 
-fn new_message_with_entries(
+pub fn new_message_with_entries(
     from: u64,
     to: u64,
     msg_type: MessageType,
@@ -109,7 +109,7 @@ fn new_message_with_entries(
     msg
 }
 
-fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
+pub fn new_message(from: u64, to: u64, msg_type: MessageType) -> Message {
     let mut m = Message::new();
     m.set_from(from);
     m.set_to(to);
@@ -163,13 +163,13 @@ pub struct Connem {
 
 #[derive(Default)]
 pub struct Network {
-    peers: HashMap<u64, StateMachine>,
+    pub peers: HashMap<u64, StateMachine>,
     storage: HashMap<u64, MemStorage>,
     dropm: HashMap<Connem, f64>,
     ignorem: HashMap<MessageType, bool>,
 }
 
-const NOP_STEPPER: Option<StateMachine> = Some(StateMachine { raft: None });
+pub const NOP_STEPPER: Option<StateMachine> = Some(StateMachine { raft: None });
 
 #[derive(Default)]
 pub struct StateMachine {
@@ -177,7 +177,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
-    fn new(r: Raft<MemStorage>) -> StateMachine {
+    pub fn new(r: Raft<MemStorage>) -> StateMachine {
         StateMachine { raft: Some(r) }
     }
 
@@ -210,7 +210,7 @@ impl DerefMut for StateMachine {
 }
 
 impl Network {
-    fn new(peers: Vec<Option<StateMachine>>) -> Network {
+    pub fn new(peers: Vec<Option<StateMachine>>) -> Network {
         Network::new_with_config(peers, false)
     }
 
@@ -273,7 +273,7 @@ impl Network {
         }
     }
 
-    fn send(&mut self, msgs: Vec<Message>) {
+    pub fn send(&mut self, msgs: Vec<Message>) {
         let mut msgs = msgs;
         while !msgs.is_empty() {
             let mut new_msgs = vec![];
