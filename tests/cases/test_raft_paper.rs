@@ -939,7 +939,7 @@ fn test_vote_request() {
 
         let _: Vec<Message> = r.msgs.drain(..).collect();
 
-        for _ in 0..r.election_timeout * 2 {
+        for _ in 1..r.election_timeout * 2 {
             r.tick();
         }
 
