@@ -3,7 +3,7 @@ use libraft::raw_node::RawNode;
 use libraft::storage::{MemStorage};
 use libraft::util::NO_LIMIT;
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -46,10 +46,10 @@ impl RaftNode {
         let mut timeout = Duration::from_millis(100);
 
         loop {
-            match self.propc_rx.recv_timeout(timeout) {
+            match self.propc_rx.try_recv() {
                 Ok(_) => {}
-                Err(RecvTimeoutError::Timeout) => {},
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(TryRecvError::Empty) => {},
+                Err(TryRecvError::Disconnected) => return,
             }
 
             let d = now.elapsed();
