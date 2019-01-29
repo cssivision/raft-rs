@@ -3,7 +3,7 @@ use libraft::raw_node::RawNode;
 use libraft::storage::{MemStorage};
 use libraft::util::NO_LIMIT;
 
-use std::sync::mpsc::{Receiver, TryRecvError};
+use crossbeam::channel::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
