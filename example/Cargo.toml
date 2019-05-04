@@ -3,7 +3,8 @@ authors = ["cssivision <cssivision@gmail.com>"]
 edition = "2018"
 name = "example"
 version = "0.1.0"
+
 [dependencies]
-clap = "2.32"
 crossbeam = "0.7"
-libraft = "0.1"
+libraft = { path = "../" }
+log = "0.4"

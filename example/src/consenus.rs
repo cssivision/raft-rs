@@ -1,7 +1,10 @@
 use libraft::raft::{self, Peer, Raft};
 use libraft::raw_node::RawNode;
-use libraft::storage::{MemStorage};
-use libraft::util::NO_LIMIT;
+use libraft::raftpb::Snapshot;
+use libraft::storage::MemStorage;
+use libraft::util::{NO_LIMIT, is_empty_snap};
+
+use log::debug;
 
 use crossbeam::channel::{self, Receiver, TryRecvError};
 use std::thread;
@@ -48,8 +51,11 @@ impl RaftNode {
         loop {
             match self.propc_rx.try_recv() {
                 Ok(_) => {}
-                Err(TryRecvError::Empty) => {},
-                Err(TryRecvError::Disconnected) => return,
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    debug!("recv disconnected");
+                    return;
+                }
             }
 
             let d = now.elapsed();
@@ -60,6 +66,30 @@ impl RaftNode {
             } else {
                 timeout -= d;
             }
+
+            on_ready(&mut self.raft);
         }
+    }
+
+}
+
+fn on_ready(rn: &mut RawNode<MemStorage>) {
+    if !rn.has_ready() {
+        return;
+    }
+    let mut ready = rn.ready();
+
+    let is_leader = rn.raft.lead == rn.raft.id;
+
+    if is_leader {
+        let msgs = ready.messages.drain(..);
+
+        for _ in msgs {
+            // todo
+        }
+    }
+
+    if !is_empty_snap(ready.snapshot) {
+
     }
 }

@@ -1,6 +1,6 @@
 use std::u64;
 
-use raftpb::{Entry, EntryType, MessageType};
+use raftpb::{Entry, EntryType, MessageType, Snapshot};
 
 use protobuf::Message;
 
@@ -56,6 +56,10 @@ pub fn is_response_msg(msgt: MessageType) -> bool {
         || msgt == MessageType::MsgHeartbeatResp
         || msgt == MessageType::MsgPreVoteResp
         || msgt == MessageType::MsgUnreachable
+}
+
+pub fn is_empty_snap(snap: Snapshot) -> bool {
+    snap.get_metadata().get_index() == 0 
 }
 
 #[cfg(test)]

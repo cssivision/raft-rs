@@ -1,8 +1,12 @@
-use clap::{App, Arg};
 use example::api;
-use std::sync::mpsc::channel;
+use crossbeam::channel::unbounded;
+use libraft::raft::Config;
 
 fn main() {
-    let (propc_tx, propc_rx) = channel::<Vec<u8>>();
-    println!("Hello, world!");
+    let cfg = Config{
+        id: 1,
+        ..Default::default()
+    };
+
+    let (propc_tx, propc_rx) = unbounded::<Vec<u8>>();
 }
