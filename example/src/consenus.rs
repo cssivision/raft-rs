@@ -1,24 +1,22 @@
-use libraft::raft::{self, Peer, Raft};
+use libraft::raft::{self, Peer};
 use libraft::raw_node::RawNode;
-use libraft::raftpb::Snapshot;
 use libraft::storage::MemStorage;
-use libraft::util::{NO_LIMIT, is_empty_snap};
+use libraft::util::{is_empty_snap, NO_LIMIT};
 
 use log::debug;
 
-use crossbeam::channel::{self, Receiver, TryRecvError};
-use std::thread;
+use crossbeam::channel::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
 
-struct RaftNode {
+pub struct RaftNode {
     raft: RawNode<MemStorage>,
     propc_rx: Receiver<Vec<u8>>,
 }
 
 impl RaftNode {
-    fn new(cfg: Config, propc_rx: Receiver<Vec<u8>>) -> RaftNode {
+    pub fn new(cfg: Config, propc_rx: Receiver<Vec<u8>>) -> RaftNode {
         let mut c = raft::Config {
             id: cfg.id,
             election_tick: cfg.election_tick,
@@ -37,16 +35,16 @@ impl RaftNode {
             });
         }
 
-        let mut r = RawNode::new(&mut c, MemStorage::new(), peers).unwrap();
+        let r = RawNode::new(&mut c, MemStorage::new(), peers).unwrap();
         RaftNode {
             raft: r,
             propc_rx: propc_rx,
         }
     }
 
-    fn start(&mut self) {
+    pub fn start(&mut self) {
         let mut now = Instant::now();
-        let mut timeout = Duration::from_millis(100);
+        let timeout = Duration::from_millis(100);
 
         loop {
             match self.propc_rx.try_recv() {
@@ -59,12 +57,9 @@ impl RaftNode {
             }
 
             let d = now.elapsed();
-            now = Instant::now();
             if d >= timeout {
-                timeout = Duration::from_millis(100);
+                now = Instant::now();
                 self.raft.tick();
-            } else {
-                timeout -= d;
             }
 
             on_ready(&mut self.raft);
@@ -80,16 +75,23 @@ fn on_ready(rn: &mut RawNode<MemStorage>) {
     let mut ready = rn.ready();
 
     let is_leader = rn.raft.lead == rn.raft.id;
-
     if is_leader {
         let msgs = ready.messages.drain(..);
-
         for _ in msgs {
             // todo
         }
     }
 
-    if !is_empty_snap(ready.snapshot) {
+    if !is_empty_snap(&ready.snapshot) {
+        rn.raft
+            .raft_log
+            .storage
+            .apply_snapshot(ready.snapshot.clone())
+            .unwrap();
+    }
 
+    rn.raft.raft_log.storage.set_hard_state(ready.hard_state);
+    if !ready.entries.is_empty() {
+        rn.raft.raft_log.storage.append(&ready.entries).unwrap();
     }
 }

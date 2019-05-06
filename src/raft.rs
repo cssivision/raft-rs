@@ -1254,7 +1254,7 @@ impl<T: Storage> Raft<T> {
 					self.set_learner_prs(learner_prs);
 				}
 
-				if let Some(mut m) = more_to_send {
+				if let Some(m) = more_to_send {
 					self.send(m);
 				}
 
@@ -1861,7 +1861,7 @@ impl<T: Storage> Raft<T> {
 
 	fn restore_node(&mut self, nodes: &[u64], is_learner: bool) {
 		for &n in nodes {
-			let (mut matched, mut next) = (0, self.raft_log.last_index() + 1);
+			let (mut matched, next) = (0, self.raft_log.last_index() + 1);
 			if n == self.id {
 				matched = next - 1;
 				self.is_learner = is_learner;

@@ -7,7 +7,7 @@ use raftpb::{
 };
 use read_only::ReadState;
 use storage::Storage;
-use util::{is_local_msg, is_response_msg};
+use util::{is_empty_snap, is_local_msg, is_response_msg};
 
 use protobuf::{self, RepeatedField};
 
@@ -231,7 +231,7 @@ impl<T: Storage> RawNode<T> {
             let e = &rd.entries[rd.entries.len() - 1];
             self.raft.raft_log.stable_to(e.get_index(), e.get_term());
         }
-        if rd.snapshot != Snapshot::new() {
+        if is_empty_snap(&rd.snapshot) {
             self.raft
                 .raft_log
                 .stable_snap_to(rd.snapshot.get_metadata().get_index());
@@ -326,7 +326,7 @@ impl<T: Storage> RawNode<T> {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgUnreachable);
         m.set_from(id);
-        self.raft.step(m).is_ok();
+        let _ = self.raft.step(m).is_ok();
     }
 
     /// report_snapshot reports the status of the sent snapshot.
@@ -337,7 +337,7 @@ impl<T: Storage> RawNode<T> {
         m.set_msg_type(MessageType::MsgSnapStatus);
         m.set_from(id);
         m.set_reject(rej);
-        self.raft.step(m).is_ok();
+        let _ = self.raft.step(m).is_ok();
     }
 
     /// transfer_leader tries to transfer leadership to the given transferee.

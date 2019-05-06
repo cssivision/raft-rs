@@ -58,7 +58,7 @@ pub fn is_response_msg(msgt: MessageType) -> bool {
         || msgt == MessageType::MsgUnreachable
 }
 
-pub fn is_empty_snap(snap: Snapshot) -> bool {
+pub fn is_empty_snap(snap: &Snapshot) -> bool {
     snap.get_metadata().get_index() == 0 
 }
 
