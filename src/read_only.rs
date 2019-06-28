@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use raftpb::Message;
 
 // ReadState provides state for read only query.
-// It's caller's responsibility to call ReadIndex first before getting
+// It's caller's responsibility to send MsgReadIndex first before getting
 // this state from ready, it's also caller's duty to differentiate if this
 // state is what it requests through request_ctx, eg. given a unique id as
 // request_ctx

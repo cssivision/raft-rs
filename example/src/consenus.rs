@@ -90,8 +90,10 @@ fn on_ready(rn: &mut RawNode<MemStorage>) {
             .unwrap();
     }
 
-    rn.raft.raft_log.storage.set_hard_state(ready.hard_state);
+    rn.raft.raft_log.storage.set_hard_state(ready.hard_state.clone());
     if !ready.entries.is_empty() {
         rn.raft.raft_log.storage.append(&ready.entries).unwrap();
     }
+
+    rn.advance(ready);
 }

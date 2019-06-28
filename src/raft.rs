@@ -1124,6 +1124,9 @@ impl<T: Storage> Raft<T> {
 				return Ok(());
 			}
 			MessageType::MsgReadIndex => {
+				// if (and only if) there is only one voting member (i.e. the leader) in the 
+				// current configuration. the local vote is needed, go through a full broadcast,
+				// quorum = 1, means only one member can vote, optimize.
 				if self.quorum() > 1 {
 					if self
 						.raft_log
@@ -1152,6 +1155,8 @@ impl<T: Storage> Raft<T> {
 								};
 								self.read_states.push(rs);
 							} else {
+								// read only request comes from followers, 
+								// send message to follower 
 								let mut m = Message::new();
 								m.set_to(msg.get_from());
 								m.set_msg_type(MessageType::MsgReadIndexResp);
@@ -1162,11 +1167,18 @@ impl<T: Storage> Raft<T> {
 						}
 					}
 				} else {
-					let rs = ReadState {
-						index: self.raft_log.committed,
-						request_ctx: msg.take_entries()[0].take_data(),
-					};
-					self.read_states.push(rs);
+					// only one voting member (the leader) in the cluster
+					if msg.get_from() == NONE || msg.get_from() == self.id {
+						// from leader itself
+						let rs = ReadState {
+							index: self.raft_log.committed,
+							request_ctx: msg.take_entries()[0].take_data(),
+						};
+						self.read_states.push(rs);
+					} else {
+						// from learner member
+						// TODO 
+					}
 				}
 				Ok(())
 			}
