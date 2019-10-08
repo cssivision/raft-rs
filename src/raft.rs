@@ -1319,7 +1319,7 @@ impl<T: Storage> Raft<T> {
 			"{} {} [term {}] starts to transfer leadership to {}",
 			self.tag, self.id, self.term, lead_transferee
 		);
-		// Transfer leadership should be finished in one electionTimeout, so reset election_elapsed.
+		// Transfer leadership should be finished in one election_timeout, so reset election_elapsed.
 		self.election_elapsed = 0;
 		self.lead_transferee = lead_transferee;
 		if pr.matched == self.raft_log.last_index() {
