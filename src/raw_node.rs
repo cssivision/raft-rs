@@ -163,7 +163,7 @@ impl<T: Storage> RawNode<T> {
         self.raft.tick();
     }
 
-    // Propose proposes data be appended to the raft log.
+    // propose proposes data be appended to the raft log.
     pub fn propose(&mut self, data: Vec<u8>) -> Result<()> {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgProp);
@@ -174,7 +174,7 @@ impl<T: Storage> RawNode<T> {
         self.raft.step(m)
     }
 
-    // ProposeConfChange proposes a config change.
+    // propose_conf_change proposes a config change.
     pub fn propose_conf_change(&mut self, cc: &ConfChange) -> Result<()> {
         let data = protobuf::Message::write_to_bytes(cc)?;
         let mut m = Message::new();
