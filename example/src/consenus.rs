@@ -1,14 +1,21 @@
+
+use crossbeam::channel::unbounded;
+use crossbeam::channel::{Receiver, Sender, TryRecvError};
 use libraft::raft::{self, Peer};
 use libraft::raw_node::RawNode;
+use libraft::raftpb;
 use libraft::storage::MemStorage;
 use libraft::util::{is_empty_snap, NO_LIMIT};
 
 use log::debug;
 
-use crossbeam::channel::{Receiver, TryRecvError};
-use std::time::{Duration, Instant};
-
 use crate::config::Config;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+use std::thread;
+
+
+// Use a HashMap to hold the `propose` callbacks.
 
 pub struct RaftNode {
     raft: RawNode<MemStorage>,
@@ -48,7 +55,9 @@ impl RaftNode {
 
         loop {
             match self.propc_rx.try_recv() {
-                Ok(_) => {}
+                Ok(data) => {
+                    self.raft.propose(data).unwrap();
+                }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     debug!("recv disconnected");
@@ -90,10 +99,45 @@ fn on_ready(rn: &mut RawNode<MemStorage>) {
             .unwrap();
     }
 
-    rn.raft.raft_log.storage.set_hard_state(ready.hard_state.clone());
+    rn.raft
+        .raft_log
+        .storage
+        .set_hard_state(ready.hard_state.clone());
     if !ready.entries.is_empty() {
         rn.raft.raft_log.storage.append(&ready.entries).unwrap();
     }
 
+    for entry in ready.committed_entries.drain(..) {
+        if entry.data.is_empty() {
+            continue;
+        }
+
+        if entry.get_entry_type() == raftpb::EntryType::EntryNormal {
+            // handle normal message
+        } else if entry.get_entry_type() == raftpb::EntryType::EntryConfChange {
+            // handle config change message
+        }
+    }
+
     rn.advance(ready);
+}
+
+
+fn send_propose(sender: Sender<Vec<u8>>) {
+    let mut cbs = HashMap::new();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(3));
+        println!("propose a request");
+        let data = Vec::from("data");
+        let (s1, r1) = unbounded::<u8>();
+        cbs.insert(
+            data,
+            Box::new(move || {
+                s1.send(1).unwrap();
+            }),
+        );
+        sender.send(Vec::from("data1")).unwrap();
+        let n = r1.recv().unwrap();
+        assert_eq!(n, 0);
+    });
 }
