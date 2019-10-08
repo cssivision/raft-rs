@@ -691,7 +691,7 @@ impl<T: Storage> Raft<T> {
 		self.prs.contains_key(&self.id)
 	}
 
-	/// past_election_timeout returns true iff r.electionElapsed is greater
+	/// past_election_timeout returns true if election_elapsed is greater
 	/// than or equal to the randomized election timeout in
 	/// [electiontimeout, 2 * electiontimeout - 1].
 	pub fn past_election_timeout(&self) -> bool {
@@ -1319,7 +1319,7 @@ impl<T: Storage> Raft<T> {
 			"{} {} [term {}] starts to transfer leadership to {}",
 			self.tag, self.id, self.term, lead_transferee
 		);
-		// Transfer leadership should be finished in one electionTimeout, so reset r.electionElapsed.
+		// Transfer leadership should be finished in one electionTimeout, so reset election_elapsed.
 		self.election_elapsed = 0;
 		self.lead_transferee = lead_transferee;
 		if pr.matched == self.raft_log.last_index() {
