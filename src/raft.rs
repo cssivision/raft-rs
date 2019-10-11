@@ -1897,6 +1897,7 @@ impl<T: Storage> Raft<T> {
 	}
 
 	pub fn handle_append_entries(&mut self, msg: &Message) {
+		// msg index < self.committed, we should tell leader the committed. 
 		if msg.get_index() < self.raft_log.committed {
 			let mut m = Message::new();
 			m.set_to(msg.get_from());
